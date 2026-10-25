@@ -43,6 +43,7 @@ vp install --frozen-lockfile
 vp check
 vp test run
 vp build
+vp run test:build
 ```
 
 Build a single package with `nix build ./nix#pass-cli --no-link`, substituting `monid` or `oo-cli` as needed.
@@ -62,7 +63,8 @@ The version assertions must be updated alongside intentional package upgrades.
 
 The workflow performs real `nix build` requests and executes the resulting binaries on each matching platform.
 It runs on all pull requests and pushes to `main` without path filters, so application and test changes receive the same native validation.
-After the official Vite Plus setup, locked dependency installation, checks, integration tests, and the Worker build run in that same job.
+After the official Vite Plus setup, locked dependency installation, checks, integration tests, the Worker build, and `vp run test:build` run in that same job.
+The build smoke test loads the compiled Alchemy bridge in real workerd and checks its authentication boundary without Cloudflare provisioning.
 The integration suite starts local Miniflare/workerd with S3-compatible access to its R2 binding, pushes a store path with `nix copy --to s3://...`, pulls it through the authenticated Worker into a separate file store, and compares the NAR dumps.
 The integration test uses temporary local credentials and does not require cloud secrets.
 Substituted or already-realized outputs are valid native runnable outputs, but do not prove a fresh source compilation occurred.
@@ -113,4 +115,5 @@ Actual deployed Cloudflare R2/Worker validation remains separate opt-in integrat
 - Linux native builds and all GitHub workflow execution remain pending because no Linux builders were available and GitHub connector credentials were unavailable.
 - Local `vp install --frozen-lockfile`, `vp test run` (five integration tests), and `vp build` passed on aarch64-darwin.
 - The integration suite confirmed a local S3 push and authenticated Worker pull roundtrip against Miniflare/workerd, including NAR dump comparison.
+- The final `vp check`, TypeScript check, five integration tests, Worker build, and `vp run test:build` passed. The compiled Alchemy bridge started in workerd, rejected unauthenticated access with 401, and queried its empty R2 binding with authenticated access returning 404.
 - Actual deployed Cloudflare R2/Worker roundtrip validation remains pending, as do Linux native execution and GitHub CI execution.
