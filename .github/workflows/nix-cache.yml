@@ -1,0 +1,53 @@
+name: Nix package validation
+
+on:
+  pull_request:
+    paths: ["nix/**", ".github/workflows/nix-cache.yml"]
+  push:
+    branches: [main]
+    paths: ["nix/**", ".github/workflows/nix-cache.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            system: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+          - runner: macos-15
+            system: aarch64-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: DeterminateSystems/nix-installer-action@v21
+      - name: Assert native Nix platform
+        env:
+          EXPECTED_SYSTEM: ${{ matrix.system }}
+        run: test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "$EXPECTED_SYSTEM"
+      - name: Test cache configuration
+        run: bash nix/test-cache.sh
+      - name: Configure optional signed binary cache
+        env:
+          CACHE_URL: ${{ vars.NIX_CACHE_URL }}
+          CACHE_PUBLIC_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
+        run: bash nix/configure-cache.sh
+      - name: Evaluate pinned packages
+        run: nix flake check ./nix --all-systems --no-build --no-update-lock-file
+      - name: Build and smoke-test native packages
+        run: bash nix/smoke.sh
+      # Vite+ is deliberately not Nix-wrapped, matching monorepo policy.
+      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+        with:
+          run-install: false
+      - name: Smoke-test official Vite Plus
+        run: |
+          vp --version
+          vp --help
