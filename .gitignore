@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.vite/
+.alchemy/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+!.env.example
+tmp/
+.DS_Store
