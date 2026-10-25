@@ -1,3 +1,5 @@
+import cloudflare from "@alchemy.run/cloudflare-runtime/vite";
+import { purePlugin } from "alchemy/Bundle/PurePlugin";
 import { defineConfig } from "vite-plus";
 
 const entry = "virtual:nix-cache/worker";
@@ -5,6 +7,11 @@ const resolvedEntry = `\0${entry}`;
 
 export default defineConfig({
   plugins: [
+    purePlugin(),
+    // Alchemy injects its own host, and Vitest tests own their Miniflare runtime.
+    process.env.ALCHEMY_CLOUDFLARE_VITE_INJECTED === "1" || process.env.VITEST
+      ? null
+      : cloudflare({ compatibilityDate: "2026-10-01", compatibilityFlags: ["nodejs_compat"] }),
     {
       name: "nix-cache:alchemy-worker",
       config: () => ({
@@ -25,10 +32,11 @@ export default defineConfig({
       },
     },
   ],
+  ssr: { noExternal: true },
   build: {
     ssr: true,
     target: "esnext",
-    rolldownOptions: { input: { index: entry }, external: ["cloudflare:workers"] },
+    rolldownOptions: { input: { index: entry }, external: /^cloudflare:/ },
   },
   fmt: { ignorePatterns: ["pnpm-lock.yaml", "dist/**", "tmp/**"] },
   lint: {

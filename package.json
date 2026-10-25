@@ -11,10 +11,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@effect/platform-node": "^4.0.6",
     "alchemy": "^2.0.0-beta.81",
     "effect": "^4.0.6"
   },
   "devDependencies": {
+    "@alchemy.run/cloudflare-runtime": "^2.0.0-beta.81",
     "@cloudflare/workers-types": "^5.20261009.1",
     "@types/node": "^24.19.1",
     "miniflare": "^5.20261006.1-alpha",
