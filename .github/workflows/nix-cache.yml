@@ -1,11 +1,9 @@
-name: Nix package validation
+name: Native package and cache validation
 
 on:
   pull_request:
-    paths: ["nix/**", ".github/workflows/nix-cache.yml"]
   push:
     branches: [main]
-    paths: ["nix/**", ".github/workflows/nix-cache.yml"]
   workflow_dispatch:
 
 permissions:
@@ -53,3 +51,11 @@ jobs:
         run: |
           vp --version
           vp --help
+      - name: Install locked application dependencies
+        run: vp install --frozen-lockfile
+      - name: Check application
+        run: vp check
+      - name: Test native cache push and pull
+        run: vp test run
+      - name: Build Worker
+        run: vp build

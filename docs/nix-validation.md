@@ -16,16 +16,17 @@ Do not edit the vendored package definitions independently.
 
 ## Package boundary
 
-| Package | Pinned version | Safe smoke command |
-| --- | --- | --- |
-| pass-cli | 0.20.0 | `pass-cli version` |
-| monid | 0.1.7 | `monid --version`, `monid --help` |
-| oo-cli (`oo`) | 1.9.8 | `oo version --json`, `oo --help` |
+| Package       | Pinned version | Safe smoke command                |
+| ------------- | -------------- | --------------------------------- |
+| pass-cli      | 0.20.0         | `pass-cli version`                |
+| monid         | 0.1.7          | `monid --version`, `monid --help` |
+| oo-cli (`oo`) | 1.9.8          | `oo version --json`, `oo --help`  |
 
 The shared overlay does not export Vite Plus.
 The monorepo instructions prohibit installing or wrapping Vite Plus with Nix.
 The workflow therefore uses the official `voidzero-dev/setup-vp` action separately, without version, Node.js, or package-manager overrides and with `run-install: false`.
-Its smoke commands are `vp --version` and `vp --help`, not application builds or package installation.
+Its initial smoke commands are `vp --version` and `vp --help`.
+The same native job then runs `vp install --frozen-lockfile`, `vp check`, `vp test run`, and `vp build` to validate the application and cache push/pull integration.
 The Vite Plus installer selects its current official version, so only the three Nix package versions are locked here.
 
 ## Run locally
@@ -38,6 +39,10 @@ bash nix/test-cache.sh
 bash nix/smoke.sh
 vp --version
 vp --help
+vp install --frozen-lockfile
+vp check
+vp test run
+vp build
 ```
 
 Build a single package with `nix build ./nix#pass-cli --no-link`, substituting `monid` or `oo-cli` as needed.
@@ -49,13 +54,17 @@ The version assertions must be updated alongside intentional package upgrades.
 
 `.github/workflows/nix-cache.yml` uses these native runners and asserts Nix's actual system before building:
 
-| Runner | Nix system |
-| --- | --- |
-| ubuntu-24.04 | x86_64-linux |
-| ubuntu-24.04-arm | aarch64-linux |
-| macos-15 | aarch64-darwin |
+| Runner           | Nix system     |
+| ---------------- | -------------- |
+| ubuntu-24.04     | x86_64-linux   |
+| ubuntu-24.04-arm | aarch64-linux  |
+| macos-15         | aarch64-darwin |
 
 The workflow performs real `nix build` requests and executes the resulting binaries on each matching platform.
+It runs on all pull requests and pushes to `main` without path filters, so application and test changes receive the same native validation.
+After the official Vite Plus setup, locked dependency installation, checks, integration tests, and the Worker build run in that same job.
+The integration suite starts local Miniflare/workerd with S3-compatible access to its R2 binding, pushes a store path with `nix copy --to s3://...`, pulls it through the authenticated Worker into a separate file store, and compares the NAR dumps.
+The integration test uses temporary local credentials and does not require cloud secrets.
 Substituted or already-realized outputs are valid native runnable outputs, but do not prove a fresh source compilation occurred.
 `--all-systems --no-build` is evaluation only and is not Linux build evidence.
 No remote builder is provisioned and no cloud-compute credits are used.
@@ -64,7 +73,7 @@ No remote builder is provisioned and no cloud-compute credits are used.
 
 Normal builds require no Worker, Cloudflare credentials, or private cache.
 Set repository variables `NIX_CACHE_URL` and `NIX_CACHE_PUBLIC_KEY` together to opt into an HTTPS signed substituter.
-The URL must not contain credentials.
+The URL must not contain credentials, a query string, or a fragment.
 The helper preserves Nix's default public substituters and signature checks.
 It does not configure upload credentials or disable signature verification.
 For a cache protected by HTTP Basic authentication, optionally set GitHub secrets `NIX_CACHE_USERNAME` and `NIX_CACHE_PASSWORD` together.
@@ -73,6 +82,7 @@ Both absent means anonymous access; an incomplete pair fails before writing conf
 The helper creates a uniquely named netrc file under `RUNNER_TEMP`, sets mode `600`, and adds its path as `netrc-file` in the user Nix configuration.
 It uses the URL's DNS hostname without its port or path as the netrc machine.
 Credentials must be nonempty tokens without whitespace, double quotes, or backslashes.
+The username must not contain a colon, because HTTP Basic uses it as the username/password separator.
 They are never written to the URL, repository, workflow output, or Nix configuration, and shell tracing is disabled before handling them.
 The runner-temporary file remains available for later Nix build steps and is discarded when the hosted runner is destroyed.
 For local use, provide an existing whitespace-free `RUNNER_TEMP` directory, supply the two credential environment variables securely, and remove the generated netrc file when finished.
@@ -85,19 +95,22 @@ For local reuse:
 CACHE_URL=https://cache.example.test CACHE_PUBLIC_KEY='cache.example.test-1:BASE64_KEY' bash nix/configure-cache.sh
 ```
 
-This is a read configuration, not a cache roundtrip test.
-Authenticated upload, empty-store download, and private Worker roundtrip validation remain separate opt-in integration work.
+The helper itself configures reads and does not upload artifacts.
+`tests/cache.test.ts` separately validates a local S3 push and authenticated Worker pull against Miniflare/workerd.
+Actual deployed Cloudflare R2/Worker validation remains separate opt-in integration work.
 
 ## Observed evidence, 2026-10-25
 
 - Native aarch64-darwin `nix build` succeeded for all three pinned packages, reusing outputs already in the local Nix store.
 - Their safe version and help smoke commands passed, including assertions for versions 0.20.0, 0.1.7, and 1.9.8.
 - The official local `~/.vite-plus/bin/vp` reported `vp v1.4.0` and its help command passed.
-- That Vite Plus report showed no local `vite-plus` project installation at the time, so this proves the official CLI runs, not a project toolchain build.
+- That initial Vite Plus report showed no local `vite-plus` project installation at the time; the application pipeline is validated separately below.
 - All three platforms passed derivation evaluation with `nix flake check --all-systems --no-build`.
-- Cache configuration tests covered absent settings, incomplete settings, HTTP rejection, newline injection rejection, credential-bearing URL rejection, and valid HTTPS configuration.
-- Optional authentication tests covered both incomplete credential pairs, missing runner temporary directory, netrc injection rejection, exact machine/login/password content, mode `600`, and absence of credentials from output even when invoked with Bash tracing.
+- Cache configuration tests covered absent settings, incomplete settings, HTTP rejection, newline injection rejection, credential-bearing URL rejection, URL query/fragment rejection, and valid HTTPS configuration.
+- Optional authentication tests covered both incomplete credential pairs, missing runner temporary directory, netrc injection rejection, colon-containing username rejection, exact machine/login/password content, mode `600`, and absence of credentials from output even when invoked with Bash tracing.
 - Bash syntax checks passed.
 - Nix reported aarch64-darwin as the local system, only x86_64-darwin as an extra platform, and `builders = @/etc/nix/machines`; that machines file was absent.
 - Linux native builds and all GitHub workflow execution remain pending because no Linux builders were available and GitHub connector credentials were unavailable.
-- No authenticated Worker cache roundtrip was performed.
+- Local `vp install --frozen-lockfile`, `vp test run` (five integration tests), and `vp build` passed on aarch64-darwin.
+- The integration suite confirmed a local S3 push and authenticated Worker pull roundtrip against Miniflare/workerd, including NAR dump comparison.
+- Actual deployed Cloudflare R2/Worker roundtrip validation remains pending, as do Linux native execution and GitHub CI execution.

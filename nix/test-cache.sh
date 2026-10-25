@@ -25,6 +25,12 @@ if CACHE_URL=https://token@cache.example.test CACHE_PUBLIC_KEY=example:key bash 
   echo 'Credentials in a cache URL were accepted.' >&2
   exit 1
 fi
+for url in 'https://cache.example.test/path?token=value' 'https://cache.example.test/path#fragment'; do
+  if CACHE_URL="$url" CACHE_PUBLIC_KEY=example:key bash nix/configure-cache.sh; then
+    echo 'Cache URL query or fragment was accepted.' >&2
+    exit 1
+  fi
+done
 CACHE_URL=https://cache.example.test CACHE_PUBLIC_KEY=example:key bash nix/configure-cache.sh
 grep -Fx 'extra-substituters = https://cache.example.test' "$root/nix/nix.conf"
 grep -Fx 'extra-trusted-public-keys = example:key' "$root/nix/nix.conf"
@@ -61,6 +67,10 @@ if RUNNER_TEMP= bash nix/configure-cache.sh > "$root/output" 2>&1; then
 fi
 if CACHE_PASSWORD=$'bad\npassword' bash nix/configure-cache.sh > "$root/output" 2>&1; then
   echo 'Netrc credential injection was accepted.' >&2
+  exit 1
+fi
+if CACHE_USERNAME=reader:unexpected bash nix/configure-cache.sh > "$root/output" 2>&1; then
+  echo 'Basic authentication username containing a colon was accepted.' >&2
   exit 1
 fi
 test ! -e "$XDG_CONFIG_HOME/nix/nix.conf"

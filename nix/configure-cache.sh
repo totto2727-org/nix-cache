@@ -8,6 +8,10 @@ if [[ -n "${CACHE_USERNAME:-}" || -n "${CACHE_PASSWORD:-}" ]]; then
     echo 'Cache authentication requires both credentials and RUNNER_TEMP.' >&2
     exit 1
   fi
+  if [[ "$CACHE_USERNAME" == *:* ]]; then
+    echo 'Cache username must not contain a colon.' >&2
+    exit 1
+  fi
   for value in "$CACHE_USERNAME" "$CACHE_PASSWORD"; do
     if [[ "$value" =~ [[:space:]] || "$value" == *'"'* || "$value" == *'\'* ]]; then
       echo 'Cache credentials must be single netrc tokens without quotes or backslashes.' >&2
@@ -20,7 +24,7 @@ fi
 if [[ -z "${CACHE_URL:-}" && -z "${CACHE_PUBLIC_KEY:-}" && -z "${CACHE_USERNAME:-}" && -z "${CACHE_PASSWORD:-}" ]]; then
   exit 0
 fi
-if [[ "${CACHE_URL:-}" != https://* || -z "${CACHE_PUBLIC_KEY:-}" || "$CACHE_URL" =~ [[:space:]] || "$CACHE_PUBLIC_KEY" =~ [[:space:]] || "$CACHE_URL" == *@* ]]; then
+if [[ "${CACHE_URL:-}" != https://* || -z "${CACHE_PUBLIC_KEY:-}" || "$CACHE_URL" =~ [[:space:]] || "$CACHE_PUBLIC_KEY" =~ [[:space:]] || "$CACHE_URL" == *@* || "$CACHE_URL" == *'?'* || "$CACHE_URL" == *'#'* ]]; then
   echo 'Set both a credential-free HTTPS CACHE_URL and a whitespace-free CACHE_PUBLIC_KEY.' >&2
   exit 1
 fi
