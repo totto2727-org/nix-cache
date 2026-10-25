@@ -20,6 +20,8 @@ export default Worker.make(
       domains: [],
       forceDestroy: false,
     });
+    const accountId = yield* bucket.accountId;
+    const bucketName = yield* bucket.bucketName;
     const reader = yield* Cloudflare.R2.ReadBucket(bucket).pipe(
       Effect.provide(Cloudflare.R2.ReadBucketBinding),
     );
@@ -33,6 +35,7 @@ export default Worker.make(
         const context = yield* WorkerExecutionContext;
         return yield* makeCacheHttpEffect({
           bucket,
+          cacheNamespace: `${yield* accountId}/${yield* bucketName}`,
           cache: (globalThis.caches as unknown as CacheStorage).default,
           waitUntil: (promise: Promise<unknown>) => context.raw.waitUntil(promise),
           username,
