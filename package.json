@@ -8,6 +8,7 @@
     "build": "vp build",
     "check": "vp check",
     "test": "vp test run",
+    "test:build": "node tests/build-smoke.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

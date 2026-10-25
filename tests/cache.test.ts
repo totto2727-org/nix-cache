@@ -32,7 +32,7 @@ beforeAll(async () => {
       {
         config: {
           name: "nix-cache-test",
-          compatibilityDate: "2026-10-01",
+          compatibilityDate: "2026-09-25",
           compatibilityFlags: ["nodejs_compat"],
           manifest: {
             mainModule: "index.js",

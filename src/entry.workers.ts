@@ -11,7 +11,7 @@ export class Worker extends Cloudflare.Worker<Worker, Cloudflare.WorkerShape>()(
 export default Worker.make(
   {
     main: import.meta.url,
-    compatibility: { date: "2026-10-01", flags: ["nodejs_compat"] },
+    compatibility: { date: "2026-09-25", flags: ["nodejs_compat"] },
     vite: {},
   },
   Effect.gen(function* () {

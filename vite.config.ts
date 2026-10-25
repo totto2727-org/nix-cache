@@ -11,7 +11,7 @@ export default defineConfig({
     // Alchemy injects its own host, and Vitest tests own their Miniflare runtime.
     process.env.ALCHEMY_CLOUDFLARE_VITE_INJECTED === "1" || process.env.VITEST
       ? null
-      : cloudflare({ compatibilityDate: "2026-10-01", compatibilityFlags: ["nodejs_compat"] }),
+      : cloudflare({ compatibilityDate: "2026-09-25", compatibilityFlags: ["nodejs_compat"] }),
     {
       name: "nix-cache:alchemy-worker",
       config: () => ({

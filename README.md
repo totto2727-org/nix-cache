@@ -29,6 +29,7 @@ vp install --frozen-lockfile
 vp check
 vp test run
 vp build
+vp run test:build
 ```
 
 `vp test run`はMiniflareの実workerd・ローカルR2・Cache APIで、本番と同じEffect HTTPハンドラーを検証します。
@@ -36,7 +37,8 @@ vp build
 S3書き込みとHTTP読み取りの誤った資格情報も拒否されることを確認します。
 この往復検証はmacOS arm64で成功しており、実Cloudflareへのpush/pullとLinux上の実行は未検証です。
 実Cloudflareでの認証や料金は不要です。
-`vp build`はAlchemy Worker bridgeを含むUIなしのWorker artifactを生成します。
+`vp build`はAlchemy Worker bridgeと依存パッケージを含むUIなしのWorker artifactを`dist/ssr/index.js`と同じディレクトリ内のチャンクへ生成します。
+`vp run test:build`は実際のビルド出力をworkerdで起動し、未認証リクエストの401と、認証後の空R2バケットに対する404を確認します。
 テスト専用入口は本番Alchemy設定の代わりにローカルbindingを提供するため、本番のプロビジョニングやsecret binding自体はこのテストだけでは検証されません。
 
 Alchemy開発モードは別途Cloudflareの認証profileが必要です。
