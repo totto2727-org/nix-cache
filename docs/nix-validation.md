@@ -67,8 +67,17 @@ Set repository variables `NIX_CACHE_URL` and `NIX_CACHE_PUBLIC_KEY` together to 
 The URL must not contain credentials.
 The helper preserves Nix's default public substituters and signature checks.
 It does not configure upload credentials or disable signature verification.
-A private cache that requires an Authorization header needs separately provisioned Nix-compatible authentication, such as a restricted `netrc-file`.
-Do not put tokens in the repository variables above or commit a netrc file.
+For a cache protected by HTTP Basic authentication, optionally set GitHub secrets `NIX_CACHE_USERNAME` and `NIX_CACHE_PASSWORD` together.
+The workflow maps them to `CACHE_USERNAME` and `CACHE_PASSWORD` only for the cache configuration step.
+Both absent means anonymous access; an incomplete pair fails before writing configuration, even when no cache URL is set.
+The helper creates a uniquely named netrc file under `RUNNER_TEMP`, sets mode `600`, and adds its path as `netrc-file` in the user Nix configuration.
+It uses the URL's DNS hostname without its port or path as the netrc machine.
+Credentials must be nonempty tokens without whitespace, double quotes, or backslashes.
+They are never written to the URL, repository, workflow output, or Nix configuration, and shell tracing is disabled before handling them.
+The runner-temporary file remains available for later Nix build steps and is discarded when the hosted runner is destroyed.
+For local use, provide an existing whitespace-free `RUNNER_TEMP` directory, supply the two credential environment variables securely, and remove the generated netrc file when finished.
+This helper supports Basic authentication, not a Bearer-only Worker.
+Do not put tokens in repository variables or commit a netrc file.
 
 For local reuse:
 
@@ -86,7 +95,8 @@ Authenticated upload, empty-store download, and private Worker roundtrip validat
 - The official local `~/.vite-plus/bin/vp` reported `vp v1.4.0` and its help command passed.
 - That Vite Plus report showed no local `vite-plus` project installation at the time, so this proves the official CLI runs, not a project toolchain build.
 - All three platforms passed derivation evaluation with `nix flake check --all-systems --no-build`.
-- Cache configuration tests covered absent settings, incomplete settings, HTTP rejection, newline injection rejection, and valid HTTPS configuration.
+- Cache configuration tests covered absent settings, incomplete settings, HTTP rejection, newline injection rejection, credential-bearing URL rejection, and valid HTTPS configuration.
+- Optional authentication tests covered both incomplete credential pairs, missing runner temporary directory, netrc injection rejection, exact machine/login/password content, mode `600`, and absence of credentials from output even when invoked with Bash tracing.
 - Bash syntax checks passed.
 - Nix reported aarch64-darwin as the local system, only x86_64-darwin as an extra platform, and `builders = @/etc/nix/machines`; that machines file was absent.
 - Linux native builds and all GitHub workflow execution remain pending because no Linux builders were available and GitHub connector credentials were unavailable.

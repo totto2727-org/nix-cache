@@ -38,6 +38,8 @@ jobs:
         env:
           CACHE_URL: ${{ vars.NIX_CACHE_URL }}
           CACHE_PUBLIC_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
+          CACHE_USERNAME: ${{ secrets.NIX_CACHE_USERNAME }}
+          CACHE_PASSWORD: ${{ secrets.NIX_CACHE_PASSWORD }}
         run: bash nix/configure-cache.sh
       - name: Evaluate pinned packages
         run: nix flake check ./nix --all-systems --no-build --no-update-lock-file
