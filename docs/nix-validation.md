@@ -114,8 +114,10 @@ Actual deployed Cloudflare R2/Worker validation remains separate opt-in integrat
 
 ## Current local evidence, 2026-10-31
 
-The local test run passed all 85 tests across three files.
+The local `vp run ci` run passed all 92 tests across three files, together with a direct TypeScript check and the production Worker build.
 The suite includes HTTP/cache integration, Effect CLI configuration validation, and compiled Worker checks.
+The integration cases verify exact NAR bytes, R2 failure responses, Cache API fallback, bounded retries during object replacement, and opaque names without fixed digest or compression rules.
+Frozen dependency installation and evaluation of both flakes for all three configured systems also passed.
 This is local validation, not evidence of a deployed Cloudflare roundtrip or successful execution of every native CI runner.
 
 ## Historical evidence, 2026-10-25

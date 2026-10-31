@@ -276,20 +276,69 @@ it("rechecks If-Range when R2 changes between HEAD and GET", () =>
     }),
   ));
 
-it.each(["cache-v2.narinfo", "nar/nonstandard-digest.nar.future"])(
-  "treats cache object names as opaque within the allowed namespace: %s",
-  (key) =>
+it.each([
+  "cache-v2.narinfo",
+  "nar/nonstandard-digest.nar.future",
+  "release@2026.narinfo",
+  "nar/release+debug.nar.future",
+])("treats cache object names as opaque within the allowed namespace: %s", (key) =>
+  runTest(
+    Effect.gen(function* () {
+      const runtime = yield* cacheRuntime();
+      const bucket = yield* Effect.promise(() => runtime.getR2Bucket("BUCKET"));
+      yield* Effect.promise(() => bucket.put(key, "opaque cache content"));
+      const response = yield* request(runtime, key);
+      expect(response.status).toBe(200);
+      expect(yield* text(response)).toBe("opaque cache content");
+    }),
+  ),
+);
+
+it.each(["GET", "HEAD"])("returns a private generic 502 when R2 %s fails", (method) =>
+  runTest(
+    Effect.gen(function* () {
+      const runtime = yield* cacheRuntime();
+      yield* seed(runtime);
+      const response = yield* request(runtime, narKey, {
+        method,
+        headers: { "x-test-r2-failure": "1" },
+      });
+      expect(response.status).toBe(502);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(yield* text(response)).toBe("");
+    }),
+  ),
+);
+
+it.each(["x-test-cache-match-failure", "x-test-cache-put-failure"])(
+  "serves the original bytes when the Cache API fails: %s",
+  (fault) =>
     runTest(
       Effect.gen(function* () {
         const runtime = yield* cacheRuntime();
-        const bucket = yield* Effect.promise(() => runtime.getR2Bucket("BUCKET"));
-        yield* Effect.promise(() => bucket.put(key, "opaque cache content"));
-        const response = yield* request(runtime, key);
+        yield* seed(runtime);
+        const response = yield* request(runtime, narKey, { headers: { [fault]: "1" } });
         expect(response.status).toBe(200);
-        expect(yield* text(response)).toBe("opaque cache content");
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(response.headers.get("content-length")).toBe("8");
+        expect(yield* bodyBytes(response)).toEqual(Array.fromIterable(bytes));
       }),
     ),
 );
+
+it("fails closed after a bounded retry when R2 keeps changing", () =>
+  runTest(
+    Effect.gen(function* () {
+      const runtime = yield* cacheRuntime();
+      yield* seed(runtime);
+      const response = yield* request(runtime, narKey, {
+        headers: { range: "bytes=0-3", "x-test-replace-after-every-head": "1" },
+      });
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(yield* text(response)).toBe("");
+    }),
+  ));
 
 it("does not cache a missing narinfo", () =>
   runTest(
