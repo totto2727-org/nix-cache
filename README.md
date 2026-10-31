@@ -21,7 +21,13 @@ flowchart LR
   Cache -->|ミス| R2
 ```
 
-## 1. 開発環境を用意する
+## 目的に合う手順を選ぶ
+
+- **既存キャッシュを利用する方**: Nixと読み取り資格情報、署名公開鍵があれば利用できます。Vite+やAlchemyは不要です。[端末の設定](#4-端末からキャッシュを利用する)へ進んでください。
+- **キャッシュを設置する方**: [管理用の環境準備](#1-管理用の環境を用意する)、WorkerとR2の設置、成果物の公開の順に進んでください。
+- **利用CIを設定する方**: [CIへの組み込み](#5-利用ciに組み込む)を参照してください。
+
+## 1. 管理用の環境を用意する
 
 公式[Vite+ CLI](https://vite.plus/)と、S3 binary cacheに対応したNixが必要です。
 JavaScript用のNode.jsとパッケージマネージャーは、Vite+にこのプロジェクトの`package.json`から解決させます。
@@ -43,13 +49,13 @@ vp run ci
 
 ### 資格情報を分ける
 
-| 用途 | 必要なもの | 渡す相手 |
-| --- | --- | --- |
-| インフラ管理 | AlchemyのCloudflare認証profile | デプロイ担当のみ |
-| R2への書き込み | 対象バケットに限定したR2 S3アクセスキー | 信頼した公開CIのみ |
-| 成果物の署名 | Nix署名秘密鍵 | 信頼した公開CIのみ |
+| 用途                 | 必要なもの                                 | 渡す相手                 |
+| -------------------- | ------------------------------------------ | ------------------------ |
+| インフラ管理         | AlchemyのCloudflare認証profile             | デプロイ担当のみ         |
+| R2への書き込み       | 対象バケットに限定したR2 S3アクセスキー    | 信頼した公開CIのみ       |
+| 成果物の署名         | Nix署名秘密鍵                              | 信頼した公開CIのみ       |
 | Workerからの読み取り | `NIX_CACHE_USERNAME`と`NIX_CACHE_PASSWORD` | Workerと利用端末・利用CI |
-| 成果物の検証 | Nix署名公開鍵 | すべての利用者 |
+| 成果物の検証         | Nix署名公開鍵                              | すべての利用者           |
 
 R2資格情報、Nix署名鍵、HTTP読み取り資格情報は別物です。
 読み取りパスワードを持つだけでは書き込みや署名はできません。
@@ -57,9 +63,9 @@ URLと署名公開鍵は共有できますが、秘密鍵、R2資格情報、net
 
 ### 読み取りsecretを渡す
 
-`.dev.vars.example`を資格情報の名前の参考にしてください。
+`.env.example`を資格情報の名前の参考にしてください。
 このStackのAlchemy設定は、デフォルトでプロセス環境変数と任意の`.env`を読み、同じ名前ならプロセス環境変数を優先します。
-`.dev.vars`を作るだけでAlchemyに読み込まれるとは限りません。
+`.dev.vars`はAlchemyの標準読み込み対象ではありません。
 以下のどちらかで、構築時に両方の値を渡します。
 
 - 秘密管理ツールやCIのsecret設定から`NIX_CACHE_USERNAME`と`NIX_CACHE_PASSWORD`をプロセス環境へ提供する。
@@ -172,7 +178,8 @@ flakeの`nixConfig.extra-substituters`と`extra-trusted-public-keys`には公開
 - Repository variables: `NIX_CACHE_URL`と`NIX_CACHE_PUBLIC_KEY`。
 - Repository secrets: `NIX_CACHE_USERNAME`と`NIX_CACHE_PASSWORD`。
 
-[`nix/configure-cache.sh`](nix/configure-cache.sh)が`CACHE_URL`、`CACHE_PUBLIC_KEY`、`CACHE_USERNAME`、`CACHE_PASSWORD`を受け取り、利用者のNix設定と、`RUNNER_TEMP`内の権限`600`のnetrcを作ります。
+[`nix/configure-cache.sh`](nix/configure-cache.sh)はEffect CLIへ委譲するため、Vite+管理のNode.jsと`vp install --frozen-lockfile`による依存関係のインストールが必要です。
+このヘルパーが`CACHE_URL`、`CACHE_PUBLIC_KEY`、`CACHE_USERNAME`、`CACHE_PASSWORD`を受け取り、利用者のNix設定と、`RUNNER_TEMP`内の権限`600`のnetrcを作ります。
 資格情報をURLやNix設定へ直接書きません。
 全設定が未指定なら何も変更せず、既存の公開キャッシュを使います。
 認証の片方だけ、非HTTPS URL、資格情報入りURL、クエリやフラグメントを持つURLなどは拒否します。
@@ -189,7 +196,7 @@ flakeの`nixConfig.extra-substituters`と`extra-trusted-public-keys`には公開
 - 完全な200 GETのみ保存します。404と部分応答は保存しません。128 MiB超は保存せずstreamします。この閾値は各プランのキャッシュ上限の保証ではありません。
 - TTLは`nix-cache-info`が60秒、narinfoが300秒、NARが1年です。NARは同一キーで内容を変更しない前提です。
 - キーはアカウントとバケットで分離し、Hostや認証情報を含めません。Cache API障害時はR2へフォールバックし、R2取得障害は内容を漏らさず502を返します。
-- GETとHEADのみ対応します。`nix-cache-info`、32文字Nix hashの`.narinfo`、`nar/`以下の52文字Nix hashのNARと対応圧縮形式に限定し、任意キー、一覧取得、クエリ付きURLは拒否します。
+- GETとHEADのみ対応します。`nix-cache-info`、ルート直下の`.narinfo`、`nar/`直下の単一パスセグメントを読み取れます。ハッシュ長や圧縮拡張子の固定リストではなく、名前空間とパスの安全性を検証します。任意の名前空間、一覧取得、クエリ付きURLは拒否します。
 - 単一byte range、ETag、If-Modified-Since、If-Range、If-Match、If-Unmodified-Sinceに対応します。取得競合は再評価し、再試行でも競合すれば503です。
 
 ## テストと開発資料
