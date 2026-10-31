@@ -208,6 +208,7 @@ steps:
 - **費用のハードキャップはありません。** 認証前のWorker呼び出しも課金対象になり得ます。レート制限、WAF、利用量監視は未構成です。
 - 読み取り資格情報は単一の共有ペアです。端末単位の失効や複数ユーザー管理は未実装です。
 - 認証はCache API検索より先に実行します。キャッシュが温まっていても未認証なら401です。
+- [Alchemy Workers Cache](https://alchemy.run/cloudflare/compute/cache/)はWorker実行前に応答できる自動キャッシュです。この構成ではWorker内で毎回認証するため有効にせず、認証後に明示的なCache APIを利用します。
 - Cache APIはPOPごとのキャッシュで、Tiered Cacheではありません。R2読み取り回数やWorker料金の上限を保証しません。
 - クライアント応答は`Cache-Control: private, no-store`です。Cloudflare Cache Rulesなどで上書きせず、Worker内部の明示的キャッシュだけを使ってください。
 - 完全な200 GETのみ保存を試みます。404と部分応答は保存しません。保存可能なサイズなどの制限はCloudflare Cache APIが判断し、保存に失敗しても元の応答をstreamします。
