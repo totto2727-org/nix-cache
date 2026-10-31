@@ -1,5 +1,8 @@
 # Nix package validation
 
+This guide serves contributors and maintainers who validate the Worker, Nix packages, and cache configuration.
+For cache installation and client use, see [README.md](../README.md).
+
 ## Source and reproducibility
 
 `nix/shared/` is a verbatim snapshot of the six `.nix` files and `flake.lock` in `nix/share/packages` at monorepo commit [`fbac6164a547ef005115c0b5343e321940d6f45b`](https://github.com/totto2727-org/monorepo/tree/fbac6164a547ef005115c0b5343e321940d6f45b/nix/share/packages).
@@ -25,26 +28,31 @@ Do not edit the vendored package definitions independently.
 The shared overlay does not export Vite Plus.
 The monorepo instructions prohibit installing or wrapping Vite Plus with Nix.
 The workflow therefore uses the official `voidzero-dev/setup-vp` action separately, without version, Node.js, or package-manager overrides and with `run-install: false`.
-Its initial smoke commands are `vp --version` and `vp --help`.
-The same native job then runs `vp install --frozen-lockfile`, `vp check`, `vp test run`, and `vp build` to validate the application and cache push/pull integration.
-The Vite Plus installer selects its current official version, so only the three Nix package versions are locked here.
+The same native job installs the project environment with `vp env install`, installs locked dependencies, configures optional cache reads, validates native packages, and runs `vp run ci`.
+Task orchestration is defined once in `vite.config.ts`.
+The root flake supplies only `nixfmt`, not JavaScript runtimes.
+The Vite Plus installer selects its current official version, while `package.json` and the lockfile define the project's JavaScript tool and dependency requirements.
 
 ## Run locally
 
 Run from the repository root:
 
 ```bash
-nix flake check ./nix --all-systems --no-build --no-update-lock-file
-bash nix/test-cache.sh
-bash nix/smoke.sh
-vp --version
-vp --help
+vp env install
+vp env current
 vp install --frozen-lockfile
-vp check
-vp test run
-vp build
-vp run test:build
+vp run nix:check
+vp run nix:smoke
+vp run ci
 ```
+
+Install the official Vite+ CLI and Nix before these steps.
+Vite+ owns Node.js and the package manager through `package.json`.
+Install the locked JavaScript dependencies before using the Effect-based cache configuration helper.
+`vp run nix:check` evaluates all configured systems without building them.
+`vp run nix:smoke` builds and smoke-tests only the native system.
+`vp run ci` runs checks and tests, with the Worker build included as a test prerequisite.
+Compiled Worker checks and cache helper tests are part of the normal Vitest suite, not separate smoke scripts.
 
 Build a single package with `nix build ./nix#pass-cli --no-link`, substituting `monid` or `oo-cli` as needed.
 The smoke script builds the native outputs and then uses a temporary HOME and XDG directories for CLI invocations.
@@ -63,8 +71,9 @@ The version assertions must be updated alongside intentional package upgrades.
 
 The workflow performs real `nix build` requests and executes the resulting binaries on each matching platform.
 It runs on all pull requests and pushes to `main` without path filters, so application and test changes receive the same native validation.
-After the official Vite Plus setup, locked dependency installation, checks, integration tests, the Worker build, and `vp run test:build` run in that same job.
-The build smoke test loads the compiled Alchemy bridge in real workerd and checks its authentication boundary without Cloudflare provisioning.
+The workflow installs the Vite+ project environment and locked dependencies before running the Effect cache helper through `vp run cache:configure`.
+It then runs `vp run nix:check`, `vp run nix:smoke`, and `vp run ci` in the same native job.
+The normal test task builds the Worker and includes compiled Alchemy bridge checks in real workerd without Cloudflare provisioning.
 The integration suite starts local Miniflare/workerd with S3-compatible access to its R2 binding, pushes a store path with `nix copy --to s3://...`, pulls it through the authenticated Worker into a separate file store, and compares the NAR dumps.
 The integration test uses temporary local credentials and does not require cloud secrets.
 Substituted or already-realized outputs are valid native runnable outputs, but do not prove a fresh source compilation occurred.
@@ -82,8 +91,10 @@ For a cache protected by HTTP Basic authentication, optionally set GitHub secret
 The workflow maps them to `CACHE_USERNAME` and `CACHE_PASSWORD` only for the cache configuration step.
 Both absent means anonymous access; an incomplete pair fails before writing configuration, even when no cache URL is set.
 The helper creates a uniquely named netrc file under `RUNNER_TEMP`, sets mode `600`, and adds its path as `netrc-file` in the user Nix configuration.
-It uses the URL's DNS hostname without its port or path as the netrc machine.
-Credentials must be nonempty tokens without whitespace, double quotes, or backslashes.
+The helper parses the URL with `Schema.URLFromString` and writes its normalized serialization to `extra-substituters`.
+It uses the parsed hostname without the port or path as the netrc machine.
+For IPv6 literals, it removes the URL brackets for libcurl's netrc format, for example `machine ::1` rather than `machine [::1]`.
+Credentials must be nonempty safe configuration tokens without whitespace, controls, double quotes, backslashes, or `#`.
 The username must not contain a colon, because HTTP Basic uses it as the username/password separator.
 They are never written to the URL, repository, workflow output, or Nix configuration, and shell tracing is disabled before handling them.
 The runner-temporary file remains available for later Nix build steps and is discarded when the hosted runner is destroyed.
@@ -91,17 +102,26 @@ For local use, provide an existing whitespace-free `RUNNER_TEMP` directory, supp
 This helper supports Basic authentication, not a Bearer-only Worker.
 Do not put tokens in repository variables or commit a netrc file.
 
-For local reuse:
+After installing the project environment and dependencies, provide settings securely and run:
 
 ```bash
-CACHE_URL=https://cache.example.test CACHE_PUBLIC_KEY='cache.example.test-1:BASE64_KEY' bash nix/configure-cache.sh
+CACHE_URL=https://cache.example.test CACHE_PUBLIC_KEY='cache.example.test-1:BASE64_KEY' vp run cache:configure
 ```
 
 The helper itself configures reads and does not upload artifacts.
 `tests/cache.test.ts` separately validates a local S3 push and authenticated Worker pull against Miniflare/workerd.
 Actual deployed Cloudflare R2/Worker validation remains separate opt-in integration work.
 
-## Observed evidence, 2026-10-25
+## Current local evidence, 2026-10-31
+
+The local test run passed all 85 tests across three files.
+The suite includes HTTP/cache integration, Effect CLI configuration validation, and compiled Worker checks.
+This is local validation, not evidence of a deployed Cloudflare roundtrip or successful execution of every native CI runner.
+
+## Historical evidence, 2026-10-25
+
+These observations describe the earlier implementation and tool setup, not the current command entry points or current test count.
+Use the commands above for current validation.
 
 - Native aarch64-darwin `nix build` succeeded for all three pinned packages, reusing outputs already in the local Nix store.
 - Their safe version and help smoke commands passed, including assertions for versions 0.20.0, 0.1.7, and 1.9.8.
@@ -113,7 +133,7 @@ Actual deployed Cloudflare R2/Worker validation remains separate opt-in integrat
 - Bash syntax checks passed.
 - Nix reported aarch64-darwin as the local system, only x86_64-darwin as an extra platform, and `builders = @/etc/nix/machines`; that machines file was absent.
 - Linux native builds and all GitHub workflow execution remain pending because no Linux builders were available and GitHub connector credentials were unavailable.
-- Local `vp install --frozen-lockfile`, `vp test run` (five integration tests), and `vp build` passed on aarch64-darwin.
+- Locked dependency installation, five integration tests, and the Worker build passed on aarch64-darwin.
 - The integration suite confirmed a local S3 push and authenticated Worker pull roundtrip against Miniflare/workerd, including NAR dump comparison.
-- The final `vp check`, TypeScript check, five integration tests, Worker build, and `vp run test:build` passed. The compiled Alchemy bridge started in workerd, rejected unauthenticated access with 401, and queried its empty R2 binding with authenticated access returning 404.
+- The format/lint check, TypeScript check, five integration tests, Worker build, and then-separate compiled Worker smoke check passed. The compiled Alchemy bridge started in workerd, rejected unauthenticated access with 401, and queried its empty R2 binding with authenticated access returning 404.
 - Actual deployed Cloudflare R2/Worker roundtrip validation remains pending, as do Linux native execution and GitHub CI execution.
