@@ -1,6 +1,10 @@
 import type * as CF from "@cloudflare/workers-types";
-import { R2Error } from "alchemy/Cloudflare/R2";
-import { Effect, Layer, Redacted, Stream } from "effect";
+import { makeRead, R2Error } from "alchemy/Cloudflare/R2";
+import { RuntimeContext } from "alchemy/RuntimeContext";
+import { Effect, Layer, Redacted } from "effect";
+// Alchemy ships this helper but omits its public package export.
+// Keep the installed-module import confined to the native acceptance fixture.
+import { makeR2ObjectWrappers } from "../node_modules/alchemy/lib/Cloudflare/R2/BucketBinding.js";
 import { HttpEffect, HttpRouter } from "effect/http";
 import { CacheBucket, CacheReader, CacheRoutes, CacheStorage } from "../src/cache";
 import { makeResponseCache } from "../src/cloudflare-storage";
@@ -38,39 +42,26 @@ export default {
             },
           })
         : env.BUCKET;
-    // The native test runtime has no Alchemy host. Only the fixture bridges
-    // its R2 binding into the Alchemy-shaped metadata and stream capabilities.
+    // Native workerd has no Alchemy host, so use Alchemy's official client
+    // constructor and value wrappers with the injected binding directly.
     const r2 = <A>(evaluate: () => Promise<A>) =>
       Effect.tryPromise({
         try: evaluate,
         catch: (cause) => new R2Error({ message: "Injected R2 failure", cause: cause as Error }),
       });
+    const reader = makeRead({
+      raw: Effect.succeed(bucket),
+      use: (evaluate) => r2(() => evaluate(bucket)),
+      tryPromise: r2,
+      ...makeR2ObjectWrappers(r2),
+    });
     const cache = (globalThis.caches as unknown as CF.CacheStorage).default;
     const routes = CacheRoutes.pipe(
       HttpRouter.provideRequest(
         Layer.mergeAll(
-          Layer.succeed(CacheBucket, {
-            head: (key) => r2(() => bucket.head(key)),
-            get: (key, options) =>
-              r2(() => bucket.get(key, options)).pipe(
-                Effect.map((object) => {
-                  if (object === null || !("body" in object)) return object;
-                  const readable = object.body as unknown as ReadableStream<Uint8Array>;
-                  return {
-                    ...object,
-                    readable,
-                    body: Stream.fromReadableStream({
-                      evaluate: () => readable,
-                      onError: (cause) =>
-                        new R2Error({
-                          message: "Injected R2 stream failure",
-                          cause: cause as Error,
-                        }),
-                    }),
-                  };
-                }),
-              ),
-          }),
+          Layer.succeed(CacheBucket, reader),
+          // makeRead's direct native helpers do not resolve a host RuntimeContext.
+          RuntimeContext.phantom,
           Layer.succeed(
             CacheStorage,
             makeResponseCache({

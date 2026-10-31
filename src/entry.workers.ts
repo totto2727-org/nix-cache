@@ -35,16 +35,13 @@ export default Worker.make(
     return {
       fetch: Effect.gen(function* () {
         // Alchemy clients resolve deferred bindings against this live request context.
-        const runtime = yield* Effect.context<RuntimeContext>();
+        const runtime = yield* RuntimeContext;
         const context = yield* WorkerExecutionContext;
         const routes = CacheRoutes.pipe(
           HttpRouter.provideRequest(
             Layer.mergeAll(
-              Layer.succeed(CacheBucket, {
-                head: (key) => reader.head(key).pipe(Effect.provideContext(runtime)),
-                get: (key, options) =>
-                  reader.get(key, options).pipe(Effect.provideContext(runtime)),
-              }),
+              Layer.succeed(CacheBucket, reader),
+              Layer.succeed(RuntimeContext, runtime),
               Layer.succeed(
                 CacheStorage,
                 makeResponseCache({

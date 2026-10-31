@@ -1,4 +1,5 @@
-import { Array, Config, Effect, FileSystem, Option, Path, Schema, String } from "effect";
+import { createRequire } from "node:module";
+import { Array, Config, Effect, FileSystem, Option, Path, Record, Schema, String } from "effect";
 import { Base64 } from "effect/encoding";
 import type { ChildProcess } from "effect/process";
 import type { Miniflare } from "miniflare";
@@ -10,30 +11,48 @@ const authorization = `Basic ${Base64.encode("reader:test-secret")}`;
 const narKey = `nar/${String.repeat(52)("0")}.nar.zst`;
 const infoKey = `${String.repeat(32)("0")}.narinfo`;
 const bytes = new Uint8Array([0, 255, 1, 128, 2, 3, 4, 5]);
-let bundle: string;
+let modules: Record<string, { readonly type: "esm"; readonly contents: string }>;
+let entryModule: string;
 
 beforeAll(
   () =>
     runTest(
       Effect.gen(function* () {
         const path = yield* Path.Path;
+        // The compiler plugin must load through Node, not Vitest's runtime module transform.
+        const { purePlugin } = createRequire(import.meta.url)(
+          "alchemy/Bundle/PurePlugin",
+        ) as typeof import("alchemy/Bundle/PurePlugin");
         // Vite's compiler and Miniflare's Cloudflare interfaces are Promise-based test boundaries.
         const result = yield* Effect.promise(() =>
           build({
             configFile: false,
             logLevel: "error",
+            plugins: [purePlugin()],
+            define: { "globalThis.__ALCHEMY_RUNTIME__": "true" },
             ssr: { noExternal: true },
-            build: { ssr: path.resolve("tests/workerd-entry.ts"), write: false, minify: false },
+            build: {
+              ssr: path.resolve("tests/workerd-entry.ts"),
+              write: false,
+              minify: false,
+              rolldownOptions: { preserveEntrySignatures: "strict" },
+            },
           }),
         );
         const built = Array.isArray(result) ? result[0] : result;
         if (!built || !("output" in built)) throw new Error("Expected a completed Worker build");
         const chunk = Option.getOrThrowWith(
-          Array.findFirst(built.output, (entry) => entry.type === "chunk"),
+          Array.findFirst(built.output, (entry) => entry.type === "chunk" && entry.isEntry),
           () => new Error("Missing acceptance Worker bundle"),
         );
         if (chunk.type !== "chunk") throw new Error("Expected an executable Worker chunk");
-        bundle = chunk.code;
+        entryModule = chunk.fileName;
+        modules = Record.fromEntries(
+          Array.map(
+            Array.filter(built.output, (entry) => entry.type === "chunk"),
+            (entry) => [entry.fileName, { type: "esm" as const, contents: entry.code }] as const,
+          ),
+        );
       }),
     ),
   60_000,
@@ -48,8 +67,8 @@ const cacheRuntime = () =>
           compatibilityDate: "2026-09-25",
           compatibilityFlags: ["nodejs_compat"],
           manifest: {
-            mainModule: "index.js",
-            modules: { "index.js": { type: "esm", contents: bundle } },
+            mainModule: entryModule,
+            modules,
           },
           env: {
             BUCKET: {

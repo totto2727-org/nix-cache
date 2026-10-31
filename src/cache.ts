@@ -1,4 +1,5 @@
-import type { GetOptions, ObjectBody, R2Error, R2Object } from "alchemy/Cloudflare/R2";
+import type { ReadBucketClient, R2Error } from "alchemy/Cloudflare/R2";
+import type { RuntimeContext } from "alchemy/RuntimeContext";
 import { Array, Context, Effect, Option, Record, Redacted, String } from "effect";
 import { Base64 } from "effect/encoding";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
@@ -34,18 +35,9 @@ export class CacheStorage extends Context.Service<CacheStorage, ResponseCache>()
   "nix-cache/ResponseCache",
 ) {}
 
-type CacheObject = Pick<R2Object, "size" | "etag" | "httpEtag" | "uploaded">;
-type CacheObjectBody = CacheObject & Pick<ObjectBody, "body" | "readable">;
-
 export class CacheBucket extends Context.Service<
   CacheBucket,
-  {
-    readonly head: (key: string) => Effect.Effect<CacheObject | null, R2Error>;
-    readonly get: (
-      key: string,
-      options: GetOptions,
-    ) => Effect.Effect<CacheObjectBody | CacheObject | null, R2Error>;
-  }
+  Pick<ReadBucketClient, "head" | "get">
 >()("nix-cache/Bucket") {}
 
 const privateHeaders = { "Cache-Control": "private, no-store", Vary: "Authorization" };
@@ -156,7 +148,11 @@ const readObject = (
   conditional: boolean,
   rangeHeader: string | undefined,
   attempt = 0,
-): Effect.Effect<HttpServerResponse.HttpServerResponse, R2Error, CacheBucket | CacheStorage> =>
+): Effect.Effect<
+  HttpServerResponse.HttpServerResponse,
+  R2Error,
+  CacheBucket | CacheStorage | RuntimeContext
+> =>
   Effect.gen(function* () {
     const bucket = yield* CacheBucket;
     const prepared: Preparation = yield* prepare(request, key, conditional, rangeHeader);
