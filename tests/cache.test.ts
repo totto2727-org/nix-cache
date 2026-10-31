@@ -157,6 +157,25 @@ it("HEAD returns metadata without a body", () =>
     }),
   ));
 
+it("lets the Cache API decide whether to store an object above the former size cap", () =>
+  runTest(
+    Effect.gen(function* () {
+      const runtime = yield* cacheRuntime();
+      const bucket = yield* Effect.promise(() => runtime.getR2Bucket("BUCKET"));
+      const aboveFormerCap = 128 * 1024 * 1024 + 1;
+      // Native bytes belong to the R2 and response body interoperability boundary.
+      yield* Effect.promise(() => bucket.put(narKey, new Uint8Array(aboveFormerCap)));
+      const first = yield* request(runtime, narKey);
+      expect(first.status).toBe(200);
+      expect((yield* Effect.promise(() => first.arrayBuffer())).byteLength).toBe(aboveFormerCap);
+      yield* Effect.promise(() => bucket.delete(narKey));
+      const cached = yield* request(runtime, narKey);
+      expect(cached.status).toBe(200);
+      expect(cached.headers.get("cache-control")).toBe("private, no-store");
+      expect((yield* Effect.promise(() => cached.arrayBuffer())).byteLength).toBe(aboveFormerCap);
+    }),
+  ));
+
 it.each([
   { range: "bytes=1-3", expected: [255, 1, 128], contentRange: "bytes 1-3/8" },
   { range: "bytes=-2", expected: [4, 5], contentRange: "bytes 6-7/8" },

@@ -73,7 +73,7 @@ URLと署名公開鍵は共有できますが、秘密鍵、R2資格情報、net
 
 強い一意の値を使ってください。
 ユーザー名にはコロンを使えません。
-後述のnetrcヘルパーを使う場合、両方とも空白、ダブルクォート、バックスラッシュを含まない単一トークンにします。
+後述の共有setup-nix actionを使う場合、両方とも空白、ダブルクォート、バックスラッシュを含まない単一トークンにします。
 未設定の構築時ConfigはAlchemyのエラーとなり、実行時の空の認証設定はWorkerが503で拒否します。
 `src/entry.workers.ts`の`Config.Redacted`読み取りは、AlchemyによってWorkerの`secret_text` bindingへ変換されます。
 別途Wranglerのsecret設定を並行管理する手順ではありません。
@@ -178,13 +178,10 @@ flakeの`nixConfig.extra-substituters`と`extra-trusted-public-keys`には公開
 - Repository variables: `NIX_CACHE_URL`と`NIX_CACHE_PUBLIC_KEY`。
 - Repository secrets: `NIX_CACHE_USERNAME`と`NIX_CACHE_PASSWORD`。
 
-[`nix/configure-cache.sh`](nix/configure-cache.sh)はEffect CLIへ委譲するため、Vite+管理のNode.jsと`vp install --frozen-lockfile`による依存関係のインストールが必要です。
-このヘルパーが`CACHE_URL`、`CACHE_PUBLIC_KEY`、`CACHE_USERNAME`、`CACHE_PASSWORD`を受け取り、利用者のNix設定と、`RUNNER_TEMP`内の権限`600`のnetrcを作ります。
-資格情報をURLやNix設定へ直接書きません。
-全設定が未指定なら何も変更せず、既存の公開キャッシュを使います。
-認証の片方だけ、非HTTPS URL、資格情報入りURL、クエリやフラグメントを持つURLなどは拒否します。
-ローカルでヘルパーを使う場合は既存の空白を含まない`RUNNER_TEMP`ディレクトリを指定し、使用後に生成したnetrcを削除してください。
-詳しい設定とネイティブ検証は[検証ガイド](docs/nix-validation.md)を参照してください。
+Nixのインストールと利用者設定の生成は、monorepoの共有`setup-nix` actionに集約しています。
+このアプリケーションの`nix/`、flake、JavaScript依存関係は利用CIに不要です。
+共有actionへキャッシュURL、署名公開鍵、読み取り資格情報を渡してください。
+アプリケーション用dev shellは不要なので`prepare-dev-shell: false`を指定します。
 
 ## 運用上の制限
 
@@ -193,7 +190,7 @@ flakeの`nixConfig.extra-substituters`と`extra-trusted-public-keys`には公開
 - 認証はCache API検索より先に実行します。キャッシュが温まっていても未認証なら401です。
 - Cache APIはPOPごとのキャッシュで、Tiered Cacheではありません。R2読み取り回数やWorker料金の上限を保証しません。
 - クライアント応答は`Cache-Control: private, no-store`です。Cloudflare Cache Rulesなどで上書きせず、Worker内部の明示的キャッシュだけを使ってください。
-- 完全な200 GETのみ保存します。404と部分応答は保存しません。128 MiB超は保存せずstreamします。この閾値は各プランのキャッシュ上限の保証ではありません。
+- 完全な200 GETのみ保存を試みます。404と部分応答は保存しません。保存可能なサイズなどの制限はCloudflare Cache APIが判断し、保存に失敗しても元の応答をstreamします。
 - TTLは`nix-cache-info`が60秒、narinfoが300秒、NARが1年です。NARは同一キーで内容を変更しない前提です。
 - キーはアカウントとバケットで分離し、Hostや認証情報を含めません。Cache API障害時はR2へフォールバックし、R2取得障害は内容を漏らさず502を返します。
 - GETとHEADのみ対応します。`nix-cache-info`、ルート直下の`.narinfo`、`nar/`直下の単一パスセグメントを読み取れます。ハッシュ長や圧縮拡張子の固定リストではなく、名前空間とパスの安全性を検証します。任意の名前空間、一覧取得、クエリ付きURLは拒否します。
@@ -210,7 +207,7 @@ flakeの`nixConfig.extra-substituters`と`extra-trusted-public-keys`には公開
 
 CIはLinux amd64、Linux arm64、macOS arm64のネイティブrunnerを定義しますが、定義の存在は実行成功の証拠ではありません。
 実Cloudflareへの公開、クラウド上のpush/pull、課金特性の検証は別途必要です。
-検証済み範囲と未検証範囲は[検証ガイド](docs/nix-validation.md)、実装時の品質方針は[AGENTS.md](AGENTS.md)にまとめています。
+実装時の品質方針は[AGENTS.md](AGENTS.md)にまとめています。
 
 ### 参考資料
 

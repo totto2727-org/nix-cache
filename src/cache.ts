@@ -28,7 +28,6 @@ export interface CacheOptions {
   readonly password: Redacted.Redacted<string>;
 }
 
-const maxCacheBytes = 128 * 1024 * 1024;
 const narTtlSeconds = 365 * 24 * 60 * 60;
 const cacheInfoTtlSeconds = 60;
 const narinfoTtlSeconds = 5 * 60;
@@ -183,12 +182,7 @@ const readObject = (
       Option.isSome(plan.range) ? 206 : 200,
       contentLength,
     );
-    if (
-      !conditional &&
-      rangeHeader === undefined &&
-      request.method === "GET" &&
-      object.size <= maxCacheBytes
-    )
+    if (!conditional && rangeHeader === undefined && request.method === "GET")
       response = yield* storage.put(cacheKey, response);
     return privateResponse(response, request.method);
   });

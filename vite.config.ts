@@ -62,12 +62,6 @@ export default defineConfig({
       check: { command: "vp check", dependsOn: ["typecheck"] },
       fix: "vp check --fix",
       test: { command: "vp test run", dependsOn: ["build"], cache: false },
-      "cache:configure": { command: "bash nix/configure-cache.sh", cache: false },
-      "nix:check": {
-        command: "nix flake check ./nix --all-systems --no-build --no-update-lock-file",
-        cache: false,
-      },
-      "nix:smoke": { command: "bash nix/smoke.sh", cache: false },
       ci: { command: "", dependsOn: ["check", "test"], cache: false },
     },
   },
