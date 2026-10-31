@@ -29,6 +29,9 @@ export interface CacheOptions {
 }
 
 const maxCacheBytes = 128 * 1024 * 1024;
+const narTtlSeconds = 365 * 24 * 60 * 60;
+const cacheInfoTtlSeconds = 60;
+const narinfoTtlSeconds = 5 * 60;
 class CacheStorage extends Context.Service<CacheStorage, Storage>()("nix-cache/Storage") {}
 
 const privateHeaders = { "Cache-Control": "private, no-store", Vary: "Authorization" };
@@ -158,7 +161,11 @@ const readObject = (
       return attempt === 0
         ? yield* readObject(request, key, cacheKey, conditional, rangeHeader, 1)
         : reply(503);
-    const ttl = String.startsWith("nar/")(key) ? 31536000 : key === "nix-cache-info" ? 60 : 300;
+    const ttl = String.startsWith("nar/")(key)
+      ? narTtlSeconds
+      : key === "nix-cache-info"
+        ? cacheInfoTtlSeconds
+        : narinfoTtlSeconds;
     const contentLength = Option.match(plan.range, {
       onNone: () => object.size,
       onSome: (range) => range.length,
