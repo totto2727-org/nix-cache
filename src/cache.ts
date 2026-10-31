@@ -1,7 +1,23 @@
 import type * as CF from "@cloudflare/workers-types";
-import { createHash, timingSafeEqual } from "node:crypto";
-import { Effect, Redacted } from "effect";
+import { Array, Context, Effect, Layer, Option, Record, Redacted, String } from "effect";
+import { Base64 } from "effect/encoding";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import {
+  credentialsMatch,
+  httpDate,
+  makeStorage,
+  uploaded,
+  type Storage,
+  type UpstreamFailure,
+} from "./cloudflare-storage";
+import {
+  dateAtLeast,
+  dateBefore,
+  matchesEtag,
+  objectKey,
+  parseRange,
+  type ByteRange,
+} from "./http-policy";
 
 export interface CacheOptions {
   readonly bucket: CF.R2Bucket;
@@ -13,174 +29,197 @@ export interface CacheOptions {
 }
 
 const maxCacheBytes = 128 * 1024 * 1024;
-const hash = (value: string) => createHash("sha256").update(value).digest();
-const nixHash = "[0-9abcdfghijklmnpqrsvwxyz]";
-const objectPath = new RegExp(
-  `^/(?:nix-cache-info|${nixHash}{32}\\.narinfo|nar/${nixHash}{52}\\.nar(?:\\.(?:xz|zst|bz2|gz|br))?)$`,
-);
+class CacheStorage extends Context.Service<CacheStorage, Storage>()("nix-cache/Storage") {}
 
-const reply = (status: number, headers?: Record<string, string>) =>
-  new Response(null, { status, headers: { "Cache-Control": "private, no-store", ...headers } });
+const privateHeaders = { "Cache-Control": "private, no-store", Vary: "Authorization" };
+const reply = (status: number, headers?: Readonly<Record<string, string>>) =>
+  HttpServerResponse.empty({ status, headers: { ...headers, ...privateHeaders } });
 
-// Only the explicit Worker Cache API may cache private objects. Never expose a
-// cacheable response to a downstream shared proxy that does not authenticate.
-const privateResponse = (response: Response, method: string) => {
-  const headers = new Headers(response.headers);
-  headers.set("Cache-Control", "private, no-store");
-  headers.set("Vary", "Authorization");
-  return new Response(method === "HEAD" ? null : response.body, {
-    status: response.status,
-    headers,
-  });
-};
+// Only the explicit Worker Cache API may cache private objects. All responses,
+// including failures and cache hits, are private to the authenticated caller.
+const privateResponse = (response: HttpServerResponse.HttpServerResponse, method: string) =>
+  method === "HEAD"
+    ? reply(response.status, response.headers)
+    : HttpServerResponse.setHeaders(response, privateHeaders);
 
-const matchesEtag = (value: string, etag: string) =>
-  value.split(",").some((part) => part.trim() === "*" || part.trim().replace(/^W\//, "") === etag);
+interface ReadPlan {
+  readonly range: Option.Option<ByteRange>;
+  readonly expectedEtag: Option.Option<string>;
+  readonly headers: Readonly<Record<string, string>>;
+}
+type Preparation =
+  | { readonly _tag: "Reply"; readonly response: HttpServerResponse.HttpServerResponse }
+  | { readonly _tag: "Read"; readonly plan: ReadPlan };
 
-const notModified = (headers: Readonly<Record<string, string>>, object: CF.R2Object) => {
-  const etag = headers["if-none-match"];
-  if (etag !== undefined) return matchesEtag(etag, object.httpEtag);
-  const since = headers["if-modified-since"];
-  return (
-    since !== undefined && Math.floor(object.uploaded.getTime() / 1000) <= Date.parse(since) / 1000
-  );
-};
-
-const parseRange = (value: string, size: number) => {
-  const match = /^bytes=(\d*)-(\d*)$/.exec(value);
-  if (!match || size === 0) return undefined;
-  const [, start, end] = match;
-  if (start === "" && end !== "") {
-    const suffix = Number(end);
-    if (!Number.isSafeInteger(suffix) || suffix <= 0) return undefined;
-    return { offset: Math.max(0, size - suffix), length: Math.min(size, suffix) };
-  }
-  const offset = Number(start);
-  const last = end === "" ? size - 1 : Number(end);
-  if (
-    start === "" ||
-    !Number.isSafeInteger(offset) ||
-    !Number.isSafeInteger(last) ||
-    offset >= size ||
-    last < offset
-  )
-    return undefined;
-  return { offset, length: Math.min(last, size - 1) - offset + 1 };
-};
-
-async function serve(
-  options: CacheOptions,
+const prepare = (
   request: HttpServerRequest.HttpServerRequest,
-  attempt = 0,
-): Promise<Response> {
-  const username = Redacted.value(options.username);
-  const password = Redacted.value(options.password);
-  if (!username || !password || username.includes(":")) return reply(503);
-  const expected = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
-  const supplied = request.headers["authorization"] ?? "";
-  if (!timingSafeEqual(hash(supplied), hash(expected))) {
-    return reply(401, { "WWW-Authenticate": 'Basic realm="nix-cache", charset="UTF-8"' });
-  }
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    return reply(405, { Allow: "GET, HEAD" });
-  }
-
-  // Reject queries instead of letting arbitrary cache-busting URLs hit R2.
-  const url = new URL(request.url, "https://nix-cache.invalid");
-  if (url.search || !objectPath.test(url.pathname)) return reply(404);
-  const key = url.pathname.slice(1);
-  // Fixed synthetic origin makes the key independent of Host and credentials.
-  const cacheKey = `https://nix-cache.internal/${encodeURIComponent(options.cacheNamespace)}/${key}`;
-  const conditional = Object.keys(request.headers).some((name) => name.startsWith("if-"));
-  const rangeHeader = request.method === "GET" ? request.headers["range"] : undefined;
-  const canUseCache = !conditional && rangeHeader === undefined;
-  if (canUseCache) {
-    const cached = await options.cache.match(cacheKey).catch(() => undefined);
-    if (cached) {
-      return privateResponse(cached as unknown as Response, request.method);
-    }
-  }
-
-  const headers = new Headers({ "Accept-Ranges": "bytes" });
-  let range: { offset: number; length: number } | undefined;
-  let expectedEtag: string | undefined;
-  if (request.method === "HEAD" || conditional || rangeHeader !== undefined) {
-    const metadata = await options.bucket.head(key);
-    if (!metadata) return reply(404);
-    expectedEtag = metadata.etag;
-    headers.set("ETag", metadata.httpEtag);
-    headers.set("Last-Modified", metadata.uploaded.toUTCString());
+  key: string,
+  conditional: boolean,
+  rangeHeader: string | undefined,
+) =>
+  Effect.gen(function* () {
+    const storage = yield* CacheStorage;
+    const headers = { "Accept-Ranges": "bytes" };
+    if (request.method !== "HEAD" && !conditional && rangeHeader === undefined)
+      return {
+        _tag: "Read",
+        plan: { headers, range: Option.none(), expectedEtag: Option.none() },
+      } satisfies Preparation;
+    const metadata = yield* storage.head(key);
+    if (!metadata) return { _tag: "Reply", response: reply(404) } satisfies Preparation;
+    const validators = {
+      ...headers,
+      ETag: metadata.httpEtag,
+      "Last-Modified": httpDate(uploaded(metadata)),
+    };
     const ifMatch = request.headers["if-match"];
-    if (
-      ifMatch !== undefined &&
-      !ifMatch
-        .split(",")
-        .some((value) => value.trim() === "*" || value.trim() === metadata.httpEtag)
-    ) {
-      return reply(412);
-    }
+    if (ifMatch !== undefined && !matchesEtag(ifMatch, metadata.httpEtag))
+      return { _tag: "Reply", response: reply(412) } satisfies Preparation;
     const unmodifiedSince = request.headers["if-unmodified-since"];
     if (
       ifMatch === undefined &&
       unmodifiedSince !== undefined &&
-      Math.floor(metadata.uploaded.getTime() / 1000) > Date.parse(unmodifiedSince) / 1000
-    ) {
-      return reply(412);
-    }
-    if (notModified(request.headers, metadata)) return reply(304, Object.fromEntries(headers));
-    if (request.method === "HEAD") {
-      headers.set("Content-Length", String(metadata.size));
-      return privateResponse(new Response(null, { headers }), "HEAD");
-    }
+      dateBefore(unmodifiedSince, uploaded(metadata))
+    )
+      return { _tag: "Reply", response: reply(412) } satisfies Preparation;
+    const ifNoneMatch = request.headers["if-none-match"];
+    const modifiedSince = request.headers["if-modified-since"];
+    if (
+      ifNoneMatch !== undefined
+        ? matchesEtag(ifNoneMatch, metadata.httpEtag, true)
+        : modifiedSince !== undefined && dateAtLeast(modifiedSince, uploaded(metadata))
+    )
+      return { _tag: "Reply", response: reply(304, validators) } satisfies Preparation;
+    if (request.method === "HEAD")
+      return {
+        _tag: "Reply",
+        response: reply(200, {
+          ...validators,
+          "Content-Length": `${metadata.size}`,
+          "Content-Type": contentType(key),
+        }),
+      } satisfies Preparation;
     const ifRange = request.headers["if-range"];
     const rangeMatches =
       ifRange === undefined ||
       ifRange === metadata.httpEtag ||
-      Date.parse(ifRange) >= Math.floor(metadata.uploaded.getTime() / 1000) * 1000;
+      dateAtLeast(ifRange, uploaded(metadata));
     if (rangeHeader !== undefined && rangeMatches) {
-      range = parseRange(rangeHeader, metadata.size);
-      if (!range) return reply(416, { "Content-Range": `bytes */${metadata.size}` });
-      headers.set(
-        "Content-Range",
-        `bytes ${range.offset}-${range.offset + range.length - 1}/${metadata.size}`,
-      );
+      const range = parseRange(rangeHeader, metadata.size);
+      if (Option.isNone(range))
+        return {
+          _tag: "Reply",
+          response: reply(416, { "Content-Range": `bytes */${metadata.size}` }),
+        } satisfies Preparation;
+      return {
+        _tag: "Read",
+        plan: {
+          expectedEtag: Option.some(metadata.etag),
+          range,
+          headers: {
+            ...validators,
+            "Content-Range": `bytes ${range.value.offset}-${range.value.offset + range.value.length - 1}/${metadata.size}`,
+          },
+        },
+      } satisfies Preparation;
     }
-  }
+    return {
+      _tag: "Read",
+      plan: { headers: validators, range: Option.none(), expectedEtag: Option.some(metadata.etag) },
+    } satisfies Preparation;
+  });
 
-  const object = await options.bucket.get(key, {
-    ...(range ? { range } : {}),
-    ...(expectedEtag ? { onlyIf: { etagMatches: expectedEtag } } : {}),
-  });
-  if (!object) return reply(404);
-  // A replacement between HEAD and GET must not mix old validators/ranges
-  // with new bytes. Re-evaluate once, then fail closed under repeated writes.
-  if (!("body" in object)) return attempt === 0 ? serve(options, request, 1) : reply(503);
-  headers.set("ETag", object.httpEtag);
-  headers.set("Last-Modified", object.uploaded.toUTCString());
-  headers.set("Content-Length", String(range?.length ?? object.size));
-  headers.set("Content-Type", key.startsWith("nar/") ? "application/octet-stream" : "text/plain");
-  const ttl = key.startsWith("nar/") ? 31536000 : key === "nix-cache-info" ? 60 : 300;
-  headers.set("Cache-Control", `public, max-age=${ttl}`);
-  const response = new Response(object.body as unknown as ReadableStream<Uint8Array>, {
-    status: range ? 206 : 200,
-    headers,
-  });
-  if (canUseCache && request.method === "GET" && object.size <= maxCacheBytes) {
-    options.waitUntil(
-      options.cache.put(cacheKey, response.clone() as unknown as CF.Response).catch(() => {
-        console.warn("Nix cache write failed");
-      }),
+const contentType = (key: string) =>
+  String.startsWith("nar/")(key) ? "application/octet-stream" : "text/plain";
+
+const readObject = (
+  request: HttpServerRequest.HttpServerRequest,
+  key: string,
+  cacheKey: string,
+  conditional: boolean,
+  rangeHeader: string | undefined,
+  attempt = 0,
+): Effect.Effect<HttpServerResponse.HttpServerResponse, UpstreamFailure, CacheStorage> =>
+  Effect.gen(function* () {
+    const storage = yield* CacheStorage;
+    const prepared: Preparation = yield* prepare(request, key, conditional, rangeHeader);
+    if (prepared._tag === "Reply") return prepared.response;
+    const { plan } = prepared;
+    const object = yield* storage.get(key, {
+      ...(Option.isSome(plan.range) ? { range: plan.range.value } : {}),
+      ...(Option.isSome(plan.expectedEtag)
+        ? { onlyIf: { etagMatches: plan.expectedEtag.value } }
+        : {}),
+    });
+    if (!object) return reply(404);
+    // A HEAD/GET replacement must not mix old validators or ranges with new
+    // bytes. Re-evaluate exactly once, then fail closed under repeated writes.
+    if (!("body" in object))
+      return attempt === 0
+        ? yield* readObject(request, key, cacheKey, conditional, rangeHeader, 1)
+        : reply(503);
+    const ttl = String.startsWith("nar/")(key) ? 31536000 : key === "nix-cache-info" ? 60 : 300;
+    const contentLength = Option.match(plan.range, {
+      onNone: () => object.size,
+      onSome: (range) => range.length,
+    });
+    let response = storage.body(
+      object,
+      {
+        ...plan.headers,
+        ETag: object.httpEtag,
+        "Last-Modified": httpDate(uploaded(object)),
+        "Content-Length": `${contentLength}`,
+        "Content-Type": contentType(key),
+        "Cache-Control": `public, max-age=${ttl}`,
+      },
+      Option.isSome(plan.range) ? 206 : 200,
+      contentLength,
     );
-  }
-  return privateResponse(response, request.method);
-}
+    if (
+      !conditional &&
+      rangeHeader === undefined &&
+      request.method === "GET" &&
+      object.size <= maxCacheBytes
+    )
+      response = yield* storage.put(cacheKey, response);
+    return privateResponse(response, request.method);
+  });
 
-/** Native Effect HTTP boundary, also used by local workerd acceptance tests. */
-export const makeCacheHttpEffect = (options: CacheOptions) =>
+const serve = (options: CacheOptions) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    return yield* Effect.tryPromise(() => serve(options, request)).pipe(
-      Effect.map(HttpServerResponse.fromWeb),
-      Effect.catch(() => Effect.succeed(HttpServerResponse.fromWeb(reply(502)))),
+    const username = Redacted.value(options.username);
+    const password = Redacted.value(options.password);
+    if (!username || !password || String.includes(":")(username)) return reply(503);
+    const expected = `Basic ${Base64.encode(`${username}:${password}`)}`;
+    if (!credentialsMatch(request.headers["authorization"] ?? "", expected))
+      return reply(401, { "WWW-Authenticate": 'Basic realm="nix-cache", charset="UTF-8"' });
+    if (request.method !== "GET" && request.method !== "HEAD")
+      return reply(405, { Allow: "GET, HEAD" });
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url) || url.value.search !== "") return reply(404);
+    const key = objectKey(url.value.pathname);
+    if (Option.isNone(key)) return reply(404);
+    // URI component encoding is the serialization boundary for the opaque cache
+    // namespace. Fixed origin prevents Host or credentials entering cache keys.
+    const cacheKey = `https://nix-cache.internal/${encodeURIComponent(options.cacheNamespace)}/${key.value}`;
+    const conditional = Array.some(
+      Record.keys<string, string>(request.headers),
+      String.startsWith("if-"),
     );
+    const rangeHeader = request.method === "GET" ? request.headers["range"] : undefined;
+    if (!conditional && rangeHeader === undefined) {
+      const storage = yield* CacheStorage;
+      const cached = yield* storage.match(cacheKey);
+      if (Option.isSome(cached)) return privateResponse(cached.value, request.method);
+    }
+    return yield* readObject(request, key.value, cacheKey, conditional, rangeHeader);
   });
+
+/** Effect HTTP composition root, also used by local workerd acceptance tests. */
+export const makeCacheHttpEffect = (options: CacheOptions) =>
+  serve(options).pipe(
+    Effect.provide(Layer.succeed(CacheStorage, makeStorage(options))),
+    Effect.catchTag("UpstreamFailure", () => Effect.succeed(reply(502))),
+  );
