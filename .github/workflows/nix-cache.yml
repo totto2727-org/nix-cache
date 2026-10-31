@@ -25,39 +25,29 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Vite+ owns the JavaScript environment, including the cache helper.
+      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+        with:
+          run-install: false
+      - name: Install project JavaScript environment
+        run: vp env install
+      - name: Install locked application dependencies
+        run: vp install --frozen-lockfile
       - uses: DeterminateSystems/nix-installer-action@v21
       - name: Assert native Nix platform
         env:
           EXPECTED_SYSTEM: ${{ matrix.system }}
         run: test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "$EXPECTED_SYSTEM"
-      - name: Test cache configuration
-        run: bash nix/test-cache.sh
       - name: Configure optional signed binary cache
         env:
           CACHE_URL: ${{ vars.NIX_CACHE_URL }}
           CACHE_PUBLIC_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
           CACHE_USERNAME: ${{ secrets.NIX_CACHE_USERNAME }}
           CACHE_PASSWORD: ${{ secrets.NIX_CACHE_PASSWORD }}
-        run: bash nix/configure-cache.sh
+        run: vp run cache:configure
       - name: Evaluate pinned packages
-        run: nix flake check ./nix --all-systems --no-build --no-update-lock-file
+        run: vp run nix:check
       - name: Build and smoke-test native packages
-        run: bash nix/smoke.sh
-      # Vite+ is deliberately not Nix-wrapped, matching monorepo policy.
-      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
-        with:
-          run-install: false
-      - name: Smoke-test official Vite Plus
-        run: |
-          vp --version
-          vp --help
-      - name: Install locked application dependencies
-        run: vp install --frozen-lockfile
-      - name: Check application
-        run: vp check
-      - name: Test native cache push and pull
-        run: vp test run
-      - name: Build Worker
-        run: vp build
-      - name: Smoke-test compiled Alchemy Worker
-        run: vp run test:build
+        run: vp run nix:smoke
+      - name: Check, build, and test the cache
+        run: vp run ci

@@ -1,4 +1,0 @@
-# Use strong, unique values. Never commit the populated file.
-# Export these variables for Alchemy's construction-time Config reads.
-NIX_CACHE_USERNAME=
-NIX_CACHE_PASSWORD=

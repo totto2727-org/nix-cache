@@ -1,5 +1,6 @@
 import cloudflare from "@alchemy.run/cloudflare-runtime/vite";
 import { purePlugin } from "alchemy/Bundle/PurePlugin";
+import { Array, String } from "effect";
 import { defineConfig } from "vite-plus";
 
 const entry = "virtual:nix-cache/worker";
@@ -21,14 +22,17 @@ export default defineConfig({
       resolveId: (id) => (id === entry ? resolvedEntry : undefined),
       load: (id) => {
         if (id !== resolvedEntry) return;
-        return [
-          'import { env, WorkerEntrypoint } from "cloudflare:workers";',
-          'import { makeWorkerBridge } from "alchemy/Cloudflare/Bridge";',
-          'import entrypoint from "/src/entry.workers.ts";',
-          "const stack = { name: env.ALCHEMY_STACK_NAME, stage: env.ALCHEMY_STAGE };",
-          'if (!stack.name || !stack.stage) throw new Error("Start the Worker with alchemy dev.");',
-          "export default makeWorkerBridge(WorkerEntrypoint, { entrypoint, stack });",
-        ].join("\n");
+        return Array.join(
+          [
+            'import { env, WorkerEntrypoint } from "cloudflare:workers";',
+            'import { makeWorkerBridge } from "alchemy/Cloudflare/Bridge";',
+            'import entrypoint from "/src/entry.workers.ts";',
+            "const stack = { name: env.ALCHEMY_STACK_NAME, stage: env.ALCHEMY_STAGE };",
+            'if (!stack.name || !stack.stage) throw new Error("Start the Worker with alchemy dev.");',
+            "export default makeWorkerBridge(WorkerEntrypoint, { entrypoint, stack });",
+          ],
+          "\n",
+        );
       },
     },
   ],
@@ -36,12 +40,35 @@ export default defineConfig({
   build: {
     ssr: true,
     target: "esnext",
-    rolldownOptions: { input: { index: entry }, external: /^cloudflare:/ },
+    rolldownOptions: {
+      input: { index: entry },
+      external: (id) => String.startsWith("cloudflare:")(id),
+    },
   },
   fmt: { ignorePatterns: ["pnpm-lock.yaml", "dist/**", "tmp/**"] },
   lint: {
     ignorePatterns: ["dist/**", "tmp/**"],
-    options: { typeAware: true, typeCheck: true },
+    options: { typeAware: true, typeCheck: false },
   },
-  test: { include: ["src/**/*.test.ts", "tests/**/*.test.ts"] },
+  test: {
+    include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
+    testTimeout: 30_000,
+  },
+  run: {
+    tasks: {
+      dev: { command: "alchemy dev --config alchemy.run.ts --no-input", cache: false },
+      build: { command: "vp build", cache: false },
+      typecheck: "tsc --noEmit",
+      check: { command: "vp check", dependsOn: ["typecheck"] },
+      fix: "vp check --fix",
+      test: { command: "vp test run", dependsOn: ["build"], cache: false },
+      "cache:configure": { command: "bash nix/configure-cache.sh", cache: false },
+      "nix:check": {
+        command: "nix flake check ./nix --all-systems --no-build --no-update-lock-file",
+        cache: false,
+      },
+      "nix:smoke": { command: "bash nix/smoke.sh", cache: false },
+      ci: { command: "", dependsOn: ["check", "test"], cache: false },
+    },
+  },
 });

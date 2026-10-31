@@ -17,17 +17,11 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          manifest = builtins.fromJSON (builtins.readFile ./package.json);
         in
         {
-          default =
-            assert manifest.packageManager == "pnpm@${pkgs.pnpm.version}";
-            pkgs.mkShell {
-              packages = [
-                pkgs.nodejs_24
-                pkgs.pnpm
-              ];
-            };
+          default = pkgs.mkShell {
+            packages = [ pkgs.nixfmt ];
+          };
         }
       );
     };

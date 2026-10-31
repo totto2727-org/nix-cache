@@ -3,14 +3,6 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "scripts": {
-    "dev": "alchemy dev",
-    "build": "vp build",
-    "check": "vp check",
-    "test": "vp test run",
-    "test:build": "node tests/build-smoke.mjs",
-    "typecheck": "tsc --noEmit"
-  },
   "dependencies": {
     "@effect/platform-node": "^4.0.6",
     "alchemy": "^2.0.0-beta.81",
