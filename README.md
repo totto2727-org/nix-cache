@@ -185,7 +185,7 @@ Nixのインストールと利用者設定の生成は、monorepoの共有`setup
 
 ```yaml
 steps:
-  - uses: totto2727-org/monorepo/.github/actions/setup-nix@577fbab342da7f52cbd81c23d3ea2f6792d782f6
+  - uses: totto2727-org/monorepo/.github/actions/setup-nix@c4f4a308d1a3f73f5d7cfc521184ab8777df3a7d
     with:
       cache-url: ${{ vars.NIX_CACHE_URL }}
       cache-public-key: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
@@ -200,7 +200,7 @@ steps:
 
 > [!IMPORTANT]
 > コントリビューター向け: 上記の共有actionの固定commitはローカル候補です。
-> monorepoの`577fbab342da7f52cbd81c23d3ea2f6792d782f6`が公開されるまで、GitHub Actionsはこの参照を解決できません。
+> monorepoの`c4f4a308d1a3f73f5d7cfc521184ab8777df3a7d`が公開されるまで、GitHub Actionsはこの参照を解決できません。
 > このCI定義を実行成功の証拠として扱わないでください。
 
 ## 運用上の制限

@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # This shared action needs no application JavaScript dependencies.
-      - uses: totto2727-org/monorepo/.github/actions/setup-nix@577fbab342da7f52cbd81c23d3ea2f6792d782f6
+      - uses: totto2727-org/monorepo/.github/actions/setup-nix@c4f4a308d1a3f73f5d7cfc521184ab8777df3a7d
         with:
           cache-url: ${{ vars.NIX_CACHE_URL }}
           cache-public-key: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
