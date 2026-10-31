@@ -1,110 +1,121 @@
 # Nix Cache
 
-Alchemy、Vite Plus、Effect HTTPで構成する、認証付きのNix binary cache読み取りWorkerの試作です。
-UIとS3互換サーバーはありません。
+自分の端末やCIで、署名付きNixビルド成果物を非公開Cloudflare R2へ保存し、認証付きURLから再利用するためのbinary cacheです。
+このREADMEはキャッシュを設置する運用者と、それを利用するNixユーザー向けです。
 
-## 構成
+- **公開側**: Nixでビルドと署名を行い、R2のS3 APIへ直接アップロードします。
+- **利用側**: Nixのsubstituterとnetrcを設定し、HTTP Basic認証付きWorkerから取得します。
+- **管理側**: Alchemyが非公開R2バケットとWorkerを管理します。バケットの手動作成は不要です。
+
+WorkerはEffect HTTPによる読み取り専用APIです。
+UI、Worker経由のS3ゲートウェイ、WorkerでのAWS SigV4リクエスト検証は実装していません。
+書き込みの認証はR2のS3 APIが担当し、読み取りの認証はWorkerが担当します。
+実Cloudflareへの公開とクラウド上のpush/pullは未検証です。
 
 ```mermaid
 flowchart LR
-  Publisher[公開用CI] -->|S3 API・署名済み成果物| R2[非公開R2]
-  Client[Nix・netrc認証] --> Worker[Effect HTTP Worker]
+  Publisher[信頼した公開CI] -->|署名済み成果物をS3 APIへ直接送信| R2[非公開R2]
+  Client[Nixとnetrc] --> Worker[読み取りWorker]
   Worker --> Auth{Basic認証}
-  Auth -->|成功| Cache[Worker Cache API]
+  Auth -->|成功| Cache[明示的なCache API]
   Cache -->|ミス| R2
 ```
 
-R2バケットとWorkerは`alchemy.run.ts`と`src/entry.workers.ts`で管理します。
-R2の公開アクセスは無効で、バケット削除時の強制データ破棄も無効です。
-設定する資格情報はAlchemyの`Config.Redacted`でWorkerのsecret bindingとして扱います。
-参照元の[Effront](https://github.com/totto2727-org/effront)と同じAlchemy v2のStack・Worker Layer構成ですが、ReactやEffrontのUIパッケージは不要です。
+## 1. 開発環境を用意する
 
-## ローカル検証
-
-Node.js、pnpm、公式Vite Plus CLI、S3 binary cache対応のNixを用意します。
-Nixの開発環境は`nix develop`でNode.jsとpnpmを提供します。
+公式[Vite+ CLI](https://vite.plus/)と、S3 binary cacheに対応したNixが必要です。
+JavaScript用のNode.jsとパッケージマネージャーは、Vite+にこのプロジェクトの`package.json`から解決させます。
+NixからVite+、Node.js、pnpmを追加して環境を重ねないでください。
 
 ```bash
+vp env install
+vp env current
 vp install --frozen-lockfile
-vp check
-vp test run
-vp build
-vp run test:build
+vp run check
+vp run test
+vp run ci
 ```
 
-`vp test run`はMiniflareの実workerd・ローカルR2・Cache APIで、本番と同じEffect HTTPハンドラーを検証します。
-実Nixの`nix copy --to s3://...`でpushし、認証付きWorkerから`nix copy --from`で別のローカルbinary cacheへpullして、NARの一致を確認します。
-S3書き込みとHTTP読み取りの誤った資格情報も拒否されることを確認します。
-この往復検証はmacOS arm64で成功しており、実Cloudflareへのpush/pullとLinux上の実行は未検証です。
-実Cloudflareでの認証や料金は不要です。
-`vp build`はAlchemy Worker bridgeと依存パッケージを含むUIなしのWorker artifactを`dist/ssr/index.js`と同じディレクトリ内のチャンクへ生成します。
-`vp run test:build`は実際のビルド出力をworkerdで起動し、未認証リクエストの401と、認証後の空R2バケットに対する404を確認します。
-テスト専用入口は本番Alchemy設定の代わりにローカルbindingを提供するため、本番のプロビジョニングやsecret binding自体はこのテストだけでは検証されません。
+別プロジェクトのセッション設定が残っている場合は、`vp env use --unset`で解除してから解決し直します。
+これらのテストとビルドはCloudflareアカウントや実バケットを必要とせず、デプロイもしません。
 
-Alchemy開発モードは別途Cloudflareの認証profileが必要です。
-この試作の検証のために実アカウントへ自動デプロイしません。
+## 2. WorkerとR2を設置する
 
-## デプロイする場合
+### 資格情報を分ける
 
-`.dev.vars.example`を参考に、推測困難な`NIX_CACHE_USERNAME`と`NIX_CACHE_PASSWORD`を安全な環境設定で渡します。
-ユーザー名にコロンは使用できず、空の認証設定は503で拒否されます。
-秘密情報をGitに追加しないでください。
-Alchemy CLIのprofileを用意し、計画を確認した上で実行します。
+| 用途 | 必要なもの | 渡す相手 |
+| --- | --- | --- |
+| インフラ管理 | AlchemyのCloudflare認証profile | デプロイ担当のみ |
+| R2への書き込み | 対象バケットに限定したR2 S3アクセスキー | 信頼した公開CIのみ |
+| 成果物の署名 | Nix署名秘密鍵 | 信頼した公開CIのみ |
+| Workerからの読み取り | `NIX_CACHE_USERNAME`と`NIX_CACHE_PASSWORD` | Workerと利用端末・利用CI |
+| 成果物の検証 | Nix署名公開鍵 | すべての利用者 |
+
+R2資格情報、Nix署名鍵、HTTP読み取り資格情報は別物です。
+読み取りパスワードを持つだけでは書き込みや署名はできません。
+URLと署名公開鍵は共有できますが、秘密鍵、R2資格情報、netrcをflakeやGitへ入れないでください。
+
+### 読み取りsecretを渡す
+
+`.dev.vars.example`を資格情報の名前の参考にしてください。
+このStackのAlchemy設定は、デフォルトでプロセス環境変数と任意の`.env`を読み、同じ名前ならプロセス環境変数を優先します。
+`.dev.vars`を作るだけでAlchemyに読み込まれるとは限りません。
+以下のどちらかで、構築時に両方の値を渡します。
+
+- 秘密管理ツールやCIのsecret設定から`NIX_CACHE_USERNAME`と`NIX_CACHE_PASSWORD`をプロセス環境へ提供する。
+- ローカルではGit除外済みの`.env`へ保存し、ファイル権限を`600`に制限する。
+
+強い一意の値を使ってください。
+ユーザー名にはコロンを使えません。
+後述のnetrcヘルパーを使う場合、両方とも空白、ダブルクォート、バックスラッシュを含まない単一トークンにします。
+未設定の構築時ConfigはAlchemyのエラーとなり、実行時の空の認証設定はWorkerが503で拒否します。
+`src/entry.workers.ts`の`Config.Redacted`読み取りは、AlchemyによってWorkerの`secret_text` bindingへ変換されます。
+別途Wranglerのsecret設定を並行管理する手順ではありません。
+
+> [!WARNING]
+> `Redacted`はログ表示の秘匿化であり、state保存時の暗号化保証ではありません。
+> このStackはローカルstateを使い、AlchemyのstateエンコーダーはRedactedの内部値も保存します。
+> `.alchemy/`、環境ファイル、認証profile、バックアップ、CI artifactを秘密情報として保護してください。
+> 複数端末やCIから更新する前に、stateの安全な永続化・共有と更新の直列化を設計してください。
+
+### 設置を実行する
+
+AlchemyのCloudflare認証profileと必要な権限を用意した運用者が実行します。
+計画を確認し、意図したアカウントとstageだけへ適用してください。
 
 ```bash
 vp exec alchemy deploy --stage production
 ```
 
-Alchemyのstateはローカル保存です。
-CIで継続的にインフラを更新する場合は、stateを安全に永続化・共有する設計が必要です。
-本試作は単一の読み取り資格情報を使います。
-端末単位の失効や複数ユーザーが必要になった時点で、複数credentialまたはAccessなどへ拡張してください。
+これは実クラウドを変更する操作です。
+このリポジトリのテストは代わりにデプロイを実行しません。
+認証や権限が不足する場合は停止し、運用者が設定を修正してください。
+ローカル開発は同じ資格情報の準備後に`vp run dev`を使います。
 
-## キャッシュの仕様と制限
+R2とWorkerは`alchemy.run.ts`と`src/entry.workers.ts`で宣言されています。
+バケットは非公開で、公開ドメインなし、強制データ破棄なしです。
+Alchemyが実際に作成したバケット名とWorker URLを管理画面またはAlchemyの出力から確認し、以下の例へ反映してください。
+R2バケットを別途手作業で作成しないでください。
 
-- 認証はキャッシュ検索より先に必ず実行します。キャッシュが温まっても未認証アクセスは401です。
-- 対象は`nix-cache-info`、32文字のNix hashを持つ`.narinfo`、`nar/`以下の52文字Nix hashを持つ`.nar`と対応する圧縮形式です。
-- GETとHEADのみを許可し、その他は405です。任意キー、クエリ付きURL、一覧取得は拒否します。
-- R2のバイナリbodyをstreamで返します。HEAD、単一byte range、ETag、If-Modified-Since、If-Range、If-Match、If-Unmodified-Sinceに対応します。
-- HEADとGETの間に内容が変化した場合はR2のETag条件付き取得で検出し、条件を再評価します。再試行でも競合した場合は503です。
-- Cache APIのキーはアカウントとバケットで分離し、クライアントのHostや認証情報を含めません。
-- 完全な200 GETのみをCache APIへ保存します。404と部分応答は保存しません。
-- TTLは`nix-cache-info`が60秒、narinfoが300秒、NARが1年です。NARは同一キーの内容を変更しない前提です。
-- 128 MiBを超えるオブジェクトはキャッシュせずR2からstreamします。制限はプランごとの上限を保証するものではなく、控えめな試作設定です。
-- クライアントへの応答は`Cache-Control: private, no-store`です。認証を通らない外側のCDNやプロキシにprivateデータを保存させないためです。
-- CloudflareのCache RulesでWorker応答の`no-store`を上書きしないでください。キャッシュはWorker内部で明示的に管理します。
-- Cache APIはデータセンターごとのキャッシュであり、Tiered Cacheではありません。R2読み取り回数やWorker呼び出し回数の課金上限を保証しません。
-- キャッシュ障害はR2へフォールバックし、R2取得障害は内容を漏らさず502を返します。
-- レート制限・WAF・利用量監視は未構成です。Basic認証だけでWorkerへのリクエスト課金まで防げるわけではありません。
+## 3. 最初の成果物をビルド・署名・アップロードする
 
-## Nixクライアント設定
+まずNix署名鍵ペアを作り、秘密鍵を公開CIの秘密管理へ保存します。
+以下は鍵を作る端末上で、リポジトリ外の保護されたディレクトリに移動して実行する例です。
+既存の鍵を上書きしない配置で実行してください。
 
-URLと署名公開鍵は共有できますが、秘密鍵・パスワードはflakeへ記録しません。
-複数flakeで共通利用する場合は端末やCIのNix設定へ追加します。
-
-```ini
-extra-substituters = https://cache.example.com
-extra-trusted-public-keys = cache.example.com-1:PUBLIC_KEY_BASE64
-netrc-file = /absolute/protected/path/nix-cache.netrc
+```bash
+umask 077
+set -C
+nix key generate-secret --key-name cache.example.com-1 > cache-signing-key.sec
+nix key convert-secret-to-public < cache-signing-key.sec > cache-signing-key.pub
 ```
 
-netrcは権限を600などに制限し、実際の資格情報で作成します。
+公開鍵ファイルの内容を利用者へ渡します。
+秘密鍵はリポジトリ外の保護された場所へ移し、公開job以外には渡しません。
+未信頼PRを、署名鍵やR2書き込み権限を持つjobで実行しないでください。
 
-```text
-machine cache.example.com
-login YOUR_USERNAME
-password YOUR_PASSWORD
-```
-
-multi-user Nixではdaemonから読める保護された配置と、管理者によるsubstituter許可設定が必要です。
-`trusted-users = *`や署名検証の無効化で回避しないでください。
-`nixConfig.extra-substituters`と`extra-trusted-public-keys`をflakeへ置くこともできますが、設定の受け入れが必要で、依存flakeからの自動継承は期待しないでください。
-
-## アップロード
-
-書き込みはWorkerを経由せず、公開CIからR2のS3 APIへ送信します。
-R2アクセスキーとNix署名鍵は別の資格情報です。
-次の例は署名鍵ファイルとR2用AWS環境変数を安全に提供している前提です。
+公開jobでは`NIX_SIGNING_KEY_FILE`で秘密鍵ファイルを指定し、R2用の`AWS_ACCESS_KEY_ID`と`AWS_SECRET_ACCESS_KEY`を秘密管理から供給します。
+Alchemy管理の実バケット名とアカウントIDを使います。
 
 ```bash
 out=$(nix build .#YOUR_PACKAGE --no-link --print-out-paths)
@@ -114,19 +125,91 @@ nix copy --to \
   "$out"
 ```
 
-実際にAlchemyが作成したバケット名を使います。
-バケットを手作業で別途作成しないでください。
-公開CI以外には書き込み権限と署名秘密鍵を渡さず、未信頼PRを署名用jobで実行しないでください。
+この例は単一の出力パスを想定しています。
+複数出力はそれぞれのパスを署名・転送してください。
+署名には対象store pathを操作できるNix権限が必要です。
+Workerはアップロードされた成果物の署名を検証しません。
+利用者側の署名検証を維持し、未署名の成果物を無条件に信頼しないでください。
 
-## 共有ツールの3環境検証
+## 4. 端末からキャッシュを利用する
 
-[検証構成・実行方法・実測範囲](docs/nix-validation.md)を参照してください。
-`nix/`はmonorepoの共有パッケージを固定した試験入力で、Linux arm64、Linux amd64、macOS arm64のネイティブCIを定義します。
-Linuxのderivation評価はLinux上での実行成功を意味しません。
+Nix設定へURLと公開鍵を追加します。
+既存の公開substituterを維持するため、`extra-`設定を使います。
 
-## 参考資料
+```ini
+extra-substituters = https://cache.example.com
+extra-trusted-public-keys = cache.example.com-1:PUBLIC_KEY_BASE64
+netrc-file = /absolute/protected/path/nix-cache.netrc
+```
+
+netrcにはWorkerに設定した資格情報を入れ、作成時から権限を`600`などに制限します。
+URLへパスワードを埋め込まないでください。
+
+```text
+machine cache.example.com
+login YOUR_USERNAME
+password YOUR_PASSWORD
+```
+
+以後は通常の`nix build .#YOUR_PACKAGE`で、署名を検証してキャッシュを利用します。
+対象成果物が既にローカルstoreにある場合、そのコマンドだけではHTTP取得の確認になりません。
+特定のstore pathを取得する場合は次の形式を使います。
+
+```bash
+nix copy --from https://cache.example.com /nix/store/KNOWN_STORE_PATH
+```
+
+multi-user Nixでは、daemonから読める保護されたnetrcの配置と、管理者によるsubstituterの許可設定が必要です。
+ユーザーの設定ファイルだけではdaemonに反映されない場合があります。
+`trusted-users = *`や署名検証の無効化で回避しないでください。
+flakeの`nixConfig.extra-substituters`と`extra-trusted-public-keys`には公開情報のみ置けますが、利用者の設定受け入れが必要で、依存flakeからの自動継承は期待できません。
+
+## 5. 利用CIに組み込む
+
+このリポジトリのCIは、以下を設定すると読み取りキャッシュを利用します。
+書き込みや署名のjobではありません。
+
+- Repository variables: `NIX_CACHE_URL`と`NIX_CACHE_PUBLIC_KEY`。
+- Repository secrets: `NIX_CACHE_USERNAME`と`NIX_CACHE_PASSWORD`。
+
+[`nix/configure-cache.sh`](nix/configure-cache.sh)が`CACHE_URL`、`CACHE_PUBLIC_KEY`、`CACHE_USERNAME`、`CACHE_PASSWORD`を受け取り、利用者のNix設定と、`RUNNER_TEMP`内の権限`600`のnetrcを作ります。
+資格情報をURLやNix設定へ直接書きません。
+全設定が未指定なら何も変更せず、既存の公開キャッシュを使います。
+認証の片方だけ、非HTTPS URL、資格情報入りURL、クエリやフラグメントを持つURLなどは拒否します。
+ローカルでヘルパーを使う場合は既存の空白を含まない`RUNNER_TEMP`ディレクトリを指定し、使用後に生成したnetrcを削除してください。
+詳しい設定とネイティブ検証は[検証ガイド](docs/nix-validation.md)を参照してください。
+
+## 運用上の制限
+
+- **費用のハードキャップはありません。** 認証前のWorker呼び出しも課金対象になり得ます。レート制限、WAF、利用量監視は未構成です。
+- 読み取り資格情報は単一の共有ペアです。端末単位の失効や複数ユーザー管理は未実装です。
+- 認証はCache API検索より先に実行します。キャッシュが温まっていても未認証なら401です。
+- Cache APIはPOPごとのキャッシュで、Tiered Cacheではありません。R2読み取り回数やWorker料金の上限を保証しません。
+- クライアント応答は`Cache-Control: private, no-store`です。Cloudflare Cache Rulesなどで上書きせず、Worker内部の明示的キャッシュだけを使ってください。
+- 完全な200 GETのみ保存します。404と部分応答は保存しません。128 MiB超は保存せずstreamします。この閾値は各プランのキャッシュ上限の保証ではありません。
+- TTLは`nix-cache-info`が60秒、narinfoが300秒、NARが1年です。NARは同一キーで内容を変更しない前提です。
+- キーはアカウントとバケットで分離し、Hostや認証情報を含めません。Cache API障害時はR2へフォールバックし、R2取得障害は内容を漏らさず502を返します。
+- GETとHEADのみ対応します。`nix-cache-info`、32文字Nix hashの`.narinfo`、`nar/`以下の52文字Nix hashのNARと対応圧縮形式に限定し、任意キー、一覧取得、クエリ付きURLは拒否します。
+- 単一byte range、ETag、If-Modified-Since、If-Range、If-Match、If-Unmodified-Sinceに対応します。取得競合は再評価し、再試行でも競合すれば503です。
+
+## テストと開発資料
+
+`vp run test`はMiniflareの実workerd、ローカルR2、Cache APIを使い、実NixのS3 pushと認証付きHTTP pullを別のローカルbinary cacheへ往復させてNARを比較します。
+誤った資格情報の拒否も検証します。
+これはローカルfixtureによる検証で、WorkerにS3ゲートウェイやSigV4検証があることを意味しません。
+`vp run build`はUIなしのWorker artifactを`dist/ssr/`へ生成します。
+通常の`vp run test`にはビルドとコンパイル済みWorkerの検証も含まれ、Alchemy bridgeをworkerdで起動して401と空バケットの404を確認します。
+テスト用bindingは本番のプロビジョニングやsecret設定を検証しません。
+
+CIはLinux amd64、Linux arm64、macOS arm64のネイティブrunnerを定義しますが、定義の存在は実行成功の証拠ではありません。
+実Cloudflareへの公開、クラウド上のpush/pull、課金特性の検証は別途必要です。
+検証済み範囲と未検証範囲は[検証ガイド](docs/nix-validation.md)、実装時の品質方針は[AGENTS.md](AGENTS.md)にまとめています。
+
+### 参考資料
 
 - [Nix S3 binary cache](https://nix.dev/manual/nix/2.28/store/types/s3-binary-cache-store)
+- [Nix binary cache署名と信頼設定](https://nix.dev/manual/nix/2.28/command-ref/conf-file.html#conf-trusted-public-keys)
+- [R2 S3 API](https://developers.cloudflare.com/r2/api/s3/api/)
 - [R2をWorkersから利用](https://developers.cloudflare.com/r2/api/workers/workers-api-usage/)
 - [Cloudflare Cache API](https://developers.cloudflare.com/workers/runtime-apis/cache/)
 - [Alchemy](https://alchemy.run/)
