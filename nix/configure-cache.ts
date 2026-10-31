@@ -45,7 +45,7 @@ const configure = Effect.gen(function* () {
   if (rawUrl === "" || publicKey === "") {
     return yield* reject("Set both CACHE_URL and CACHE_PUBLIC_KEY.");
   }
-  if (!configToken(rawUrl) || !configToken(publicKey)) {
+  if (!singleToken(rawUrl) || !configToken(publicKey)) {
     return yield* reject("Cache settings must be single safe configuration tokens.");
   }
   // Schema owns URL parsing. The returned platform URL is the sole source of
@@ -62,8 +62,6 @@ const configure = Effect.gen(function* () {
     url.password !== "" ||
     url.search !== "" ||
     url.hash !== "" ||
-    // Preserve the helper's credential-delimiter ban even when URL erases empty userinfo.
-    String.includes("@")(rawUrl) ||
     String.includes("?")(rawUrl) ||
     String.includes("#")(rawUrl)
   ) {
@@ -117,6 +115,12 @@ const configure = Effect.gen(function* () {
   const publicConfig = `\nextra-substituters = ${url.href}\nextra-trusted-public-keys = ${publicKey}\n`;
   if (!authenticated) return yield* fs.writeFileString(config, publicConfig, { flag: "a" });
 
+  // libcurl netrc machine names omit IPv6 brackets. URL parsing has already
+  // validated the literal, so this is serialization, not hostname validation.
+  const machine =
+    String.startsWith("[")(url.hostname) && String.endsWith("]")(url.hostname)
+      ? String.slice(1, -1)(url.hostname)
+      : url.hostname;
   // mkdtemp creates a unique private directory. Exclusive creation (wx) rejects
   // a pre-existing file or symlink and sets 0600 before any secret is written.
   const owned = yield* fs.makeTempDirectory({ directory: temp, prefix: "nix-cache." });
@@ -124,7 +128,7 @@ const configure = Effect.gen(function* () {
   yield* Effect.gen(function* () {
     yield* fs.writeFileString(
       netrc,
-      `machine ${url.hostname}\nlogin ${login}\npassword ${credential}\n`,
+      `machine ${machine}\nlogin ${login}\npassword ${credential}\n`,
       {
         flag: "wx",
         mode: 0o600,

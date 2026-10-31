@@ -1,7 +1,7 @@
-import { spawnSync } from "node:child_process";
-import { NodeServices } from "@effect/platform-node";
+import type { NodeServices } from "@effect/platform-node/NodeServices";
 import { Array, Effect, FileSystem, Path, String } from "effect";
 import { describe, expect, it } from "vite-plus/test";
+import { command, runTest } from "./support";
 
 const reader = { CACHE_USERNAME: "fixture-reader", CACHE_PASSWORD: "fixture-secret" };
 const configured = {
@@ -18,59 +18,55 @@ interface Fixture {
   readonly run: (
     settings?: Readonly<Record<string, string>>,
     trace?: boolean,
-  ) => Effect.Effect<{
-    readonly status: number | null;
-    readonly stdout: string;
-    readonly stderr: string;
-  }>;
+  ) => Effect.Effect<
+    {
+      readonly status: number;
+      readonly stdout: string;
+      readonly stderr: string;
+    },
+    unknown,
+    NodeServices
+  >;
 }
 
-const withFixture = (test: (fixture: Fixture) => Effect.Effect<void, unknown>) =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const temporary = path.resolve("tmp");
-        yield* fs.makeDirectory(temporary, { recursive: true });
-        const root = yield* fs.makeTempDirectoryScoped({
-          directory: temporary,
-          prefix: "configure-cache-test.",
-        });
-        const runner = path.join(root, "runner");
-        yield* fs.makeDirectory(runner);
-        const config = path.join(root, "config", "nix", "nix.conf");
-        yield* test({
-          fs,
-          path,
-          root,
-          runner,
-          config,
-          // Node's synchronous process boundary exercises the real shell + Node24
-          // entry point, captures both streams, and returns nonzero status as data.
-          run: (settings = {}, trace = false) =>
-            Effect.sync(() => {
-              const child = spawnSync(
-                "bash",
-                [...(trace ? ["-x"] : []), "nix/configure-cache.sh"],
-                {
-                  encoding: "utf8",
-                  timeout: 15_000,
-                  env: {
-                    PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
-                    HOME: root,
-                    XDG_CONFIG_HOME: path.join(root, "config"),
-                    RUNNER_TEMP: runner,
-                    ...settings,
-                  },
-                },
-              );
-              expect(child.error).toBeUndefined();
-              return { status: child.status, stdout: child.stdout, stderr: child.stderr };
-            }),
-        });
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
+const withFixture = (test: (fixture: Fixture) => Effect.Effect<void, unknown, NodeServices>) =>
+  runTest(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const temporary = path.resolve("tmp");
+      yield* fs.makeDirectory(temporary, { recursive: true });
+      const root = yield* fs.makeTempDirectoryScoped({
+        directory: temporary,
+        prefix: "configure-cache-test.",
+      });
+      const runner = path.join(root, "runner");
+      yield* fs.makeDirectory(runner);
+      const config = path.join(root, "config", "nix", "nix.conf");
+      yield* test({
+        fs,
+        path,
+        root,
+        runner,
+        config,
+        run: (settings = {}, trace = false) =>
+          command("bash", [...(trace ? ["-x"] : []), "nix/configure-cache.sh"], {
+            extendEnv: false,
+            env: {
+              // process.execPath selects the actual Node24 runtime used by Vitest.
+              // The shell needs its directory in POSIX PATH, not ambient secrets.
+              PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+              HOME: root,
+              XDG_CONFIG_HOME: path.join(root, "config"),
+              RUNNER_TEMP: runner,
+              ...settings,
+            },
+          }).pipe(
+            Effect.map(({ exitCode, stdout, stderr }) => ({ status: exitCode, stdout, stderr })),
+            Effect.timeout("15 seconds"),
+          ),
+      });
+    }),
   );
 
 const expectNoSecrets = (output: { stdout: string; stderr: string }) => {
@@ -101,6 +97,17 @@ describe("Nix cache configuration CLI", () => {
       "https://[2001:db8::1]:8443/prefix",
     ],
     ["encoded path", "https://cache.example.test/a%20b", "https://cache.example.test/a%20b"],
+    ["empty userinfo", "https://@cache.example.test", "https://cache.example.test/"],
+    [
+      "at sign in path",
+      "https://cache.example.test/releases@2026",
+      "https://cache.example.test/releases@2026",
+    ],
+    [
+      "backslash normalization",
+      "https://cache.example.test/prefix\\child",
+      "https://cache.example.test/prefix/child",
+    ],
   ])("uses the parsed normalized URL: %s", (_name, url, normalized) =>
     withFixture(({ fs, config, runner, run }) =>
       Effect.gen(function* () {
@@ -124,7 +131,6 @@ describe("Nix cache configuration CLI", () => {
       "URL credentials",
       { ...configured, CACHE_URL: "https://fixture-reader:fixture-secret@cache.example.test" },
     ],
-    ["empty userinfo", { ...configured, CACHE_URL: "https://@cache.example.test" }],
     ["query", { ...configured, CACHE_URL: "https://cache.example.test?token=fixture-secret" }],
     ["empty query", { ...configured, CACHE_URL: "https://cache.example.test?" }],
     ["fragment", { ...configured, CACHE_URL: "https://cache.example.test#fixture-secret" }],
@@ -192,7 +198,7 @@ describe("Nix cache configuration CLI", () => {
 
   it.each([
     ["DNS", "https://CACHE.example.test:443/prefix", "cache.example.test"],
-    ["IPv6", "https://[2001:db8::1]:8443/prefix", "[2001:db8::1]"],
+    ["IPv6", "https://[2001:db8::1]:8443/prefix", "2001:db8::1"],
   ])(
     "writes unique private netrc files using parsed %s hostname and hides secrets even under bash -x",
     (_name, url, host) =>
