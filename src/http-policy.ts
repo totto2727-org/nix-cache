@@ -1,7 +1,7 @@
 import { Array, DateTime, Number as Numeric, Option, Schema, String } from "effect";
 
-// Object names are opaque to the reader. Constrain the public namespace, not
-// Nix's current digest alphabet or compression formats.
+// Object names are opaque to the reader. Reject ambiguous path components,
+// not digest alphabets, compression formats or harmless filename punctuation.
 const safeName = (name: string) =>
   name !== "" &&
   name !== "." &&
@@ -9,19 +9,18 @@ const safeName = (name: string) =>
   Array.every(
     String.split(name, ""),
     (character) =>
-      (character >= "a" && character <= "z") ||
-      (character >= "A" && character <= "Z") ||
-      (character >= "0" && character <= "9") ||
-      character === "." ||
-      character === "_" ||
-      character === "-",
+      character !== "/" &&
+      character !== "\\" &&
+      character !== "%" &&
+      character > "\u001f" &&
+      (character < "\u007f" || character > "\u009f") &&
+      String.trim(character) !== "",
   );
 
 export const objectKey = (pathname: string): Option.Option<string> => {
   const key = String.slice(1)(pathname);
   if (key === "nix-cache-info") return Option.some(key);
-  if (safeName(key) && String.endsWith(".narinfo")(key) && key !== ".narinfo")
-    return Option.some(key);
+  if (safeName(key) && String.endsWith(".narinfo")(key)) return Option.some(key);
   if (String.startsWith("nar/")(key) && safeName(String.slice(4)(key))) return Option.some(key);
   return Option.none();
 };
@@ -54,9 +53,9 @@ const rangeInteger = Schema.decodeUnknownOption(Schema.NumberFromString.check(Sc
 export const parseRange = (value: string, size: number): Option.Option<ByteRange> => {
   // HTTP's decimal-only single byte-range grammar needs lexical validation:
   // Number alone also accepts whitespace, signs, exponents and hex literals.
-  const match = /^bytes=(\d*)-(\d*)$/.exec(value);
-  if (!match || size === 0) return Option.none();
-  const [, start, end] = match;
+  const match = String.match(/^bytes=(\d*)-(\d*)$/)(value);
+  if (Option.isNone(match) || size === 0) return Option.none();
+  const [, start, end] = match.value;
   if (start === "" && end !== "") {
     const suffix = rangeInteger(end);
     if (Option.isNone(suffix) || suffix.value <= 0) return Option.none();

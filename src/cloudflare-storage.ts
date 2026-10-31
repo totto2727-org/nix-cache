@@ -1,6 +1,6 @@
 import type * as CF from "@cloudflare/workers-types";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { Data, DateTime, Effect, Option } from "effect";
+import { Data, DateTime, Effect, Option, Schema } from "effect";
 import { HttpServerResponse } from "effect/http";
 
 export class UpstreamFailure extends Data.TaggedError("UpstreamFailure")<{
@@ -29,13 +29,15 @@ export const httpDate = (value: DateTime.Utc) => DateTime.toDateUtc(value).toUTC
 // fromWeb converts bodies into Effect Streams. Workerd then loses the native
 // fixed-length stream marker and drops Content-Length. Preserve the native body
 // only at this adapter, with explicit Effect body metadata for header updates.
+const contentLengthFromHeader = Schema.decodeUnknownOption(Schema.NumberFromString);
+
 const fromCloudflare = (response: Response) =>
   HttpServerResponse.raw(response.body, {
     status: response.status,
     headers: response.headers,
     contentType: response.headers.get("content-type") ?? undefined,
     contentLength: Option.getOrUndefined(
-      Option.map(Option.fromNullishOr(response.headers.get("content-length")), Number),
+      contentLengthFromHeader(response.headers.get("content-length")),
     ),
   });
 
