@@ -1,8 +1,9 @@
 import type * as CF from "@cloudflare/workers-types";
-import { Effect, Layer, Redacted } from "effect";
+import { R2Error } from "alchemy/Cloudflare/R2";
+import { Effect, Layer, Redacted, Stream } from "effect";
 import { HttpEffect, HttpRouter } from "effect/http";
-import { CacheReader, CacheRoutes, CacheStorage } from "../src/cache";
-import { makeStorage } from "../src/cloudflare-storage";
+import { CacheBucket, CacheReader, CacheRoutes, CacheStorage } from "../src/cache";
+import { makeResponseCache } from "../src/cloudflare-storage";
 
 export default {
   // Native Request/Promise/proxy operations are confined to this workerd test
@@ -37,14 +38,42 @@ export default {
             },
           })
         : env.BUCKET;
+    // The native test runtime has no Alchemy host. Only the fixture bridges
+    // its R2 binding into the Alchemy-shaped metadata and stream capabilities.
+    const r2 = <A>(evaluate: () => Promise<A>) =>
+      Effect.tryPromise({
+        try: evaluate,
+        catch: (cause) => new R2Error({ message: "Injected R2 failure", cause: cause as Error }),
+      });
     const cache = (globalThis.caches as unknown as CF.CacheStorage).default;
     const routes = CacheRoutes.pipe(
       HttpRouter.provideRequest(
         Layer.mergeAll(
+          Layer.succeed(CacheBucket, {
+            head: (key) => r2(() => bucket.head(key)),
+            get: (key, options) =>
+              r2(() => bucket.get(key, options)).pipe(
+                Effect.map((object) => {
+                  if (object === null || !("body" in object)) return object;
+                  const readable = object.body as unknown as ReadableStream<Uint8Array>;
+                  return {
+                    ...object,
+                    readable,
+                    body: Stream.fromReadableStream({
+                      evaluate: () => readable,
+                      onError: (cause) =>
+                        new R2Error({
+                          message: "Injected R2 stream failure",
+                          cause: cause as Error,
+                        }),
+                    }),
+                  };
+                }),
+              ),
+          }),
           Layer.succeed(
             CacheStorage,
-            makeStorage({
-              bucket,
+            makeResponseCache({
               cache: {
                 async match(key, options) {
                   if (request.headers.has("x-test-cache-match-failure"))

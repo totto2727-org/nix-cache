@@ -1,12 +1,13 @@
+import type { GetOptions, ObjectBody, R2Error, R2Object } from "alchemy/Cloudflare/R2";
 import { Array, Context, Effect, Option, Record, Redacted, String } from "effect";
 import { Base64 } from "effect/encoding";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
   credentialsMatch,
   httpDate,
+  objectResponse,
   uploaded,
-  type Storage,
-  type UpstreamFailure,
+  type ResponseCache,
 } from "./cloudflare-storage";
 import {
   dateAtLeast,
@@ -29,7 +30,23 @@ export class CacheReader extends Context.Service<
 const narTtlSeconds = 365 * 24 * 60 * 60;
 const cacheInfoTtlSeconds = 60;
 const narinfoTtlSeconds = 5 * 60;
-export class CacheStorage extends Context.Service<CacheStorage, Storage>()("nix-cache/Storage") {}
+export class CacheStorage extends Context.Service<CacheStorage, ResponseCache>()(
+  "nix-cache/ResponseCache",
+) {}
+
+type CacheObject = Pick<R2Object, "size" | "etag" | "httpEtag" | "uploaded">;
+type CacheObjectBody = CacheObject & Pick<ObjectBody, "body" | "readable">;
+
+export class CacheBucket extends Context.Service<
+  CacheBucket,
+  {
+    readonly head: (key: string) => Effect.Effect<CacheObject | null, R2Error>;
+    readonly get: (
+      key: string,
+      options: GetOptions,
+    ) => Effect.Effect<CacheObjectBody | CacheObject | null, R2Error>;
+  }
+>()("nix-cache/Bucket") {}
 
 const privateHeaders = { "Cache-Control": "private, no-store", Vary: "Authorization" };
 const reply = (status: number, headers?: Readonly<Record<string, string>>) =>
@@ -58,14 +75,14 @@ const prepare = (
   rangeHeader: string | undefined,
 ) =>
   Effect.gen(function* () {
-    const storage = yield* CacheStorage;
+    const bucket = yield* CacheBucket;
     const headers = { "Accept-Ranges": "bytes" };
     if (request.method !== "HEAD" && !conditional && rangeHeader === undefined)
       return {
         _tag: "Read",
         plan: { headers, range: Option.none(), expectedEtag: Option.none() },
       } satisfies Preparation;
-    const metadata = yield* storage.head(key);
+    const metadata = yield* bucket.head(key);
     if (!metadata) return { _tag: "Reply", response: reply(404) } satisfies Preparation;
     const validators = {
       ...headers,
@@ -139,13 +156,13 @@ const readObject = (
   conditional: boolean,
   rangeHeader: string | undefined,
   attempt = 0,
-): Effect.Effect<HttpServerResponse.HttpServerResponse, UpstreamFailure, CacheStorage> =>
+): Effect.Effect<HttpServerResponse.HttpServerResponse, R2Error, CacheBucket | CacheStorage> =>
   Effect.gen(function* () {
-    const storage = yield* CacheStorage;
+    const bucket = yield* CacheBucket;
     const prepared: Preparation = yield* prepare(request, key, conditional, rangeHeader);
     if (prepared._tag === "Reply") return prepared.response;
     const { plan } = prepared;
-    const object = yield* storage.get(key, {
+    const object = yield* bucket.get(key, {
       ...(Option.isSome(plan.range) ? { range: plan.range.value } : {}),
       ...(Option.isSome(plan.expectedEtag)
         ? { onlyIf: { etagMatches: plan.expectedEtag.value } }
@@ -167,7 +184,7 @@ const readObject = (
       onNone: () => object.size,
       onSome: (range) => range.length,
     });
-    let response = storage.body(
+    let response = objectResponse(
       object,
       {
         ...plan.headers,
@@ -180,8 +197,10 @@ const readObject = (
       Option.isSome(plan.range) ? 206 : 200,
       contentLength,
     );
-    if (!conditional && rangeHeader === undefined && request.method === "GET")
-      response = yield* storage.put(cacheKey, response);
+    if (!conditional && rangeHeader === undefined && request.method === "GET") {
+      const cache = yield* CacheStorage;
+      response = yield* cache.put(cacheKey, response);
+    }
     return privateResponse(response, request.method);
   });
 
@@ -215,7 +234,7 @@ const cacheObject = Effect.gen(function* () {
     if (Option.isSome(cached)) return privateResponse(cached.value, request.method);
   }
   return yield* readObject(request, key.value, cacheKey, conditional, rangeHeader);
-}).pipe(Effect.catchTag("UpstreamFailure", () => Effect.succeed(reply(502))));
+}).pipe(Effect.catchTag("R2Error", () => Effect.succeed(reply(502))));
 
 /** Concrete read endpoints, with storage and reader settings supplied by the entry point. */
 export const CacheRoutes = HttpRouter.addAll([

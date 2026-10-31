@@ -1,16 +1,8 @@
 import type * as CF from "@cloudflare/workers-types";
+import type { ObjectBody, R2Object } from "alchemy/Cloudflare/R2";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { Data, DateTime, Effect, Option, Schema } from "effect";
+import { DateTime, Effect, Option, Schema } from "effect";
 import { HttpServerResponse } from "effect/http";
-
-export class UpstreamFailure extends Data.TaggedError("UpstreamFailure")<{
-  readonly cause: unknown;
-}> {}
-
-// Only calls into Cloudflare bindings turn Promise rejection into a recoverable
-// upstream failure. Defects in the HTTP program are deliberately not caught.
-const cloudflare = <A>(evaluate: () => Promise<A>) =>
-  Effect.tryPromise({ try: evaluate, catch: (cause) => new UpstreamFailure({ cause }) });
 
 // Fixed-size SHA-256 digests preserve timing-safe comparison for arbitrary
 // credential lengths. Native crypto is required for timingSafeEqual.
@@ -20,7 +12,8 @@ export const credentialsMatch = (supplied: string, expected: string) =>
     createHash("sha256").update(expected).digest(),
   );
 
-export const uploaded = (object: CF.R2Object) => DateTime.fromDateUnsafe(object.uploaded);
+export const uploaded = (object: Pick<R2Object, "uploaded">) =>
+  DateTime.fromDateUnsafe(object.uploaded);
 
 // Effect has no HTTP IMF-fixdate formatter. Date conversion stays here, solely
 // for the RFC 9110 wire representation, never for comparisons or parsing.
@@ -41,22 +34,18 @@ const fromCloudflare = (response: Response) =>
     ),
   });
 
-export const makeStorage = (options: {
-  readonly bucket: CF.R2Bucket;
+export const makeResponseCache = (options: {
   readonly cache: Pick<CF.Cache, "match" | "put">;
   readonly waitUntil: (promise: Promise<unknown>) => void;
 }) => ({
-  head: (key: string) => cloudflare(() => options.bucket.head(key)),
-  get: (key: string, getOptions: CF.R2GetOptions) =>
-    cloudflare(() => options.bucket.get(key, getOptions)),
   match: (key: string) =>
-    cloudflare(() => options.cache.match(key)).pipe(
+    Effect.tryPromise(() => options.cache.match(key)).pipe(
       Effect.map((response) =>
         Option.fromNullishOr(response).pipe(
           Option.map((value) => fromCloudflare(value as unknown as Response)),
         ),
       ),
-      Effect.catchTag("UpstreamFailure", () => Effect.succeed(Option.none())),
+      Effect.orElseSucceed(() => Option.none()),
     ),
   // Cache API needs a cloneable native Response and waitUntil needs a Promise.
   // Tee only here, retaining streaming and the Effect response in the core.
@@ -66,27 +55,27 @@ export const makeStorage = (options: {
       const cached = web.clone();
       options.waitUntil(
         Effect.runPromise(
-          cloudflare(() => options.cache.put(key, cached as unknown as CF.Response)).pipe(
-            Effect.catchTag("UpstreamFailure", () => Effect.logWarning("Nix cache write failed")),
+          Effect.tryPromise(() => options.cache.put(key, cached as unknown as CF.Response)).pipe(
+            Effect.catch(() => Effect.logWarning("Nix cache write failed")),
           ),
         ),
       );
       return fromCloudflare(web);
     }),
-  // R2 supplies a Web ReadableStream. HttpServerResponse.raw forwards it without
-  // buffering, while all response construction and policy remain Effect HTTP.
-  body: (
-    object: CF.R2ObjectBody,
-    headers: Readonly<Record<string, string>>,
-    status: number,
-    contentLength: number,
-  ) =>
-    HttpServerResponse.raw(object.body, {
-      status,
-      headers,
-      contentLength,
-      contentType: headers["Content-Type"],
-    }),
 });
 
-export type Storage = ReturnType<typeof makeStorage>;
+// Alchemy exposes the original R2 readable for zero-copy native HTTP forwarding.
+// Effect stream fallback supports clients without a native stream, without buffering.
+export const objectResponse = (
+  object: Pick<ObjectBody, "readable" | "body">,
+  headers: Readonly<Record<string, string>>,
+  status: number,
+  contentLength: number,
+) => {
+  const options = { status, headers, contentLength, contentType: headers["Content-Type"] };
+  return object.readable === undefined
+    ? HttpServerResponse.stream(object.body, options)
+    : HttpServerResponse.raw(object.readable, options);
+};
+
+export type ResponseCache = ReturnType<typeof makeResponseCache>;

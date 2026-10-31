@@ -1,10 +1,11 @@
-import type { CacheStorage } from "@cloudflare/workers-types";
+import type { CacheStorage as NativeCacheStorage } from "@cloudflare/workers-types";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { WorkerExecutionContext } from "alchemy/Cloudflare/Workers";
+import { RuntimeContext } from "alchemy/RuntimeContext";
 import { Config, Effect, Layer } from "effect";
 import { HttpRouter } from "effect/http";
-import { CacheReader, CacheRoutes, CacheStorage as CacheStorageService } from "./cache";
-import { makeStorage } from "./cloudflare-storage";
+import { CacheBucket, CacheReader, CacheRoutes, CacheStorage } from "./cache";
+import { makeResponseCache } from "./cloudflare-storage";
 
 export class Worker extends Cloudflare.Worker<Worker, Cloudflare.WorkerShape>()(
   "nix-cache-reader",
@@ -33,17 +34,23 @@ export default Worker.make(
 
     return {
       fetch: Effect.gen(function* () {
-        const bucket = yield* reader.raw;
+        // Alchemy clients resolve deferred bindings against this live request context.
+        const runtime = yield* Effect.context<RuntimeContext>();
         const context = yield* WorkerExecutionContext;
         const routes = CacheRoutes.pipe(
           HttpRouter.provideRequest(
             Layer.mergeAll(
+              Layer.succeed(CacheBucket, {
+                head: (key) => reader.head(key).pipe(Effect.provideContext(runtime)),
+                get: (key, options) =>
+                  reader.get(key, options).pipe(Effect.provideContext(runtime)),
+              }),
               Layer.succeed(
-                CacheStorageService,
-                makeStorage({
-                  bucket,
-                  // Native Cache API and Promise lifetimes are Worker runtime boundaries.
-                  cache: (globalThis.caches as unknown as CacheStorage).default,
+                CacheStorage,
+                makeResponseCache({
+                  // Workers Cache checks before fetch and only exposes purge, so
+                  // explicit Cache API access is required after endpoint authentication.
+                  cache: (globalThis.caches as unknown as NativeCacheStorage).default,
                   waitUntil: (promise: Promise<unknown>) => context.raw.waitUntil(promise),
                 }),
               ),
