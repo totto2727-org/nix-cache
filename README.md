@@ -183,6 +183,26 @@ Nixのインストールと利用者設定の生成は、monorepoの共有`setup
 共有actionへキャッシュURL、署名公開鍵、読み取り資格情報を渡してください。
 アプリケーション用dev shellは不要なので`prepare-dev-shell: false`を指定します。
 
+```yaml
+steps:
+  - uses: totto2727-org/monorepo/.github/actions/setup-nix@577fbab342da7f52cbd81c23d3ea2f6792d782f6
+    with:
+      cache-url: ${{ vars.NIX_CACHE_URL }}
+      cache-public-key: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
+      cache-username: ${{ secrets.NIX_CACHE_USERNAME }}
+      cache-password: ${{ secrets.NIX_CACHE_PASSWORD }}
+      prepare-dev-shell: "false"
+  - run: nix build .#YOUR_PACKAGE
+```
+
+共有actionがNix設定と保護されたnetrcを生成するため、利用者がこのアプリケーションをcheckoutしたり、Vite+やNode.jsを準備したりする必要はありません。
+このリポジトリの開発CIでは、共有actionの後にVite+とアプリケーション依存関係を準備します。
+
+> [!IMPORTANT]
+> コントリビューター向け: 上記の共有actionの固定commitはローカル候補です。
+> monorepoの`577fbab342da7f52cbd81c23d3ea2f6792d782f6`が公開されるまで、GitHub Actionsはこの参照を解決できません。
+> このCI定義を実行成功の証拠として扱わないでください。
+
 ## 運用上の制限
 
 - **費用のハードキャップはありません。** 認証前のWorker呼び出しも課金対象になり得ます。レート制限、WAF、利用量監視は未構成です。
@@ -193,7 +213,7 @@ Nixのインストールと利用者設定の生成は、monorepoの共有`setup
 - 完全な200 GETのみ保存を試みます。404と部分応答は保存しません。保存可能なサイズなどの制限はCloudflare Cache APIが判断し、保存に失敗しても元の応答をstreamします。
 - TTLは`nix-cache-info`が60秒、narinfoが300秒、NARが1年です。NARは同一キーで内容を変更しない前提です。
 - キーはアカウントとバケットで分離し、Hostや認証情報を含めません。Cache API障害時はR2へフォールバックし、R2取得障害は内容を漏らさず502を返します。
-- GETとHEADのみ対応します。`nix-cache-info`、ルート直下の`.narinfo`、`nar/`直下の単一パスセグメントを読み取れます。ハッシュ長や圧縮拡張子の固定リストではなく、名前空間とパスの安全性を検証します。任意の名前空間、一覧取得、クエリ付きURLは拒否します。
+- GETとHEADのみ対応します。`nix-cache-info`、ルート直下の`.narinfo`、`nar/`直下の単一パスセグメントを読み取れます。ハッシュ長や圧縮拡張子、文字のブラックリストは設けず、URL parserが返すpathnameの名前空間と階層だけを確認します。`nar/%2fsecret.nar`などのpercent表現もdecodeせず、同名のR2キーとして扱います。任意の名前空間、一覧取得、クエリ付きURLは拒否します。
 - 単一byte range、ETag、If-Modified-Since、If-Range、If-Match、If-Unmodified-Sinceに対応します。取得競合は再評価し、再試行でも競合すれば503です。
 
 ## テストと開発資料

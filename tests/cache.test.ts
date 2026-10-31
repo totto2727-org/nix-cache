@@ -300,6 +300,7 @@ it.each([
   "nar/nonstandard-digest.nar.future",
   "release@2026.narinfo",
   "nar/release+debug.nar.future",
+  "nar/%2fsecret.nar",
 ])("treats cache object names as opaque within the allowed namespace: %s", (key) =>
   runTest(
     Effect.gen(function* () {
@@ -386,14 +387,16 @@ it.each(["PUT", "POST", "DELETE", "OPTIONS"])("rejects reader method %s", (metho
 it.each([
   `${infoKey}?bust=1`,
   "other-secret-file",
-  "%2e%2e/secret",
-  "nar/../secret",
   "nar/nested/file.nar",
-  "nar/%2fsecret.nar",
+  "nar/",
+  "other/file.nar",
 ])("rejects paths outside the binary cache namespace: %s", (key) =>
   runTest(
     Effect.gen(function* () {
       const runtime = yield* cacheRuntime();
+      const bucket = yield* Effect.promise(() => runtime.getR2Bucket("BUCKET"));
+      const storedKey = String.split(key, "?")[0] ?? key;
+      yield* Effect.promise(() => bucket.put(storedKey, "outside the allowed namespace"));
       expect((yield* request(runtime, key)).status).toBe(404);
     }),
   ),

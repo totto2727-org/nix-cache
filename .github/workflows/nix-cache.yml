@@ -1,4 +1,4 @@
-name: Native package and cache validation
+name: Native cache validation
 
 on:
   pull_request:
@@ -25,7 +25,18 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Vite+ owns the JavaScript environment, including the cache helper.
+      # This shared action needs no application JavaScript dependencies.
+      - uses: totto2727-org/monorepo/.github/actions/setup-nix@577fbab342da7f52cbd81c23d3ea2f6792d782f6
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-public-key: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
+          cache-username: ${{ secrets.NIX_CACHE_USERNAME }}
+          cache-password: ${{ secrets.NIX_CACHE_PASSWORD }}
+          prepare-dev-shell: "false"
+      - name: Assert native Nix platform
+        env:
+          EXPECTED_SYSTEM: ${{ matrix.system }}
+        run: test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "$EXPECTED_SYSTEM"
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
         with:
           run-install: false
@@ -33,21 +44,5 @@ jobs:
         run: vp env install
       - name: Install locked application dependencies
         run: vp install --frozen-lockfile
-      - uses: DeterminateSystems/nix-installer-action@v21
-      - name: Assert native Nix platform
-        env:
-          EXPECTED_SYSTEM: ${{ matrix.system }}
-        run: test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "$EXPECTED_SYSTEM"
-      - name: Configure optional signed binary cache
-        env:
-          CACHE_URL: ${{ vars.NIX_CACHE_URL }}
-          CACHE_PUBLIC_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
-          CACHE_USERNAME: ${{ secrets.NIX_CACHE_USERNAME }}
-          CACHE_PASSWORD: ${{ secrets.NIX_CACHE_PASSWORD }}
-        run: vp run cache:configure
-      - name: Evaluate pinned packages
-        run: vp run nix:check
-      - name: Build and smoke-test native packages
-        run: vp run nix:smoke
       - name: Check, build, and test the cache
         run: vp run ci

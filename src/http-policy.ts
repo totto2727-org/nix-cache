@@ -1,27 +1,11 @@
 import { Array, DateTime, Number as Numeric, Option, Schema, String } from "effect";
 
-// Object names are opaque to the reader. Reject ambiguous path components,
-// not digest alphabets, compression formats or harmless filename punctuation.
-const safeName = (name: string) =>
-  name !== "" &&
-  name !== "." &&
-  name !== ".." &&
-  Array.every(
-    String.split(name, ""),
-    (character) =>
-      character !== "/" &&
-      character !== "\\" &&
-      character !== "%" &&
-      character > "\u001f" &&
-      (character < "\u007f" || character > "\u009f") &&
-      String.trim(character) !== "",
-  );
-
 export const objectKey = (pathname: string): Option.Option<string> => {
   const key = String.slice(1)(pathname);
+  const segments = String.split(key, "/");
   if (key === "nix-cache-info") return Option.some(key);
-  if (safeName(key) && String.endsWith(".narinfo")(key)) return Option.some(key);
-  if (String.startsWith("nar/")(key) && safeName(String.slice(4)(key))) return Option.some(key);
+  if (segments.length === 1 && String.endsWith(".narinfo")(key)) return Option.some(key);
+  if (segments.length === 2 && segments[0] === "nar" && segments[1] !== "") return Option.some(key);
   return Option.none();
 };
 
