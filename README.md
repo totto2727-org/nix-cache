@@ -199,8 +199,8 @@ steps:
 このリポジトリの開発CIでは、共有actionの後にVite+とアプリケーション依存関係を準備します。
 
 > [!IMPORTANT]
-> コントリビューター向け: 上記の共有actionの固定commitはローカル候補です。
-> monorepoの`c4f4a308d1a3f73f5d7cfc521184ab8777df3a7d`が公開されるまで、GitHub Actionsはこの参照を解決できません。
+> 共有actionは公開済みの固定commitを参照します。
+> 共有actionのコミット`c4f4a308d1a3f73f5d7cfc521184ab8777df3a7d`は公開済みです。monorepo側の変更は[PR #393](https://github.com/totto2727-org/monorepo/pull/393)で確認できます。
 > このCI定義を実行成功の証拠として扱わないでください。
 
 ## 運用上の制限
