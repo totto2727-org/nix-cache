@@ -223,7 +223,7 @@ steps:
 誤った資格情報の拒否も検証します。
 これはローカルfixtureによる検証で、WorkerにS3ゲートウェイやSigV4検証があることを意味しません。
 `vp run build`はUIなしのWorker artifactを`dist/ssr/`へ生成します。
-通常の`vp run test`にはビルドとコンパイル済みWorkerの検証も含まれ、Alchemy bridgeをworkerdで起動して401と空バケットの404を確認します。
+通常の`vp run test`にはビルドとコンパイル済みWorkerの検証も含まれ、Alchemy bridgeをworkerdで起動して401・404、R2取得の200とContent-Length、元オブジェクト削除後のキャッシュ取得と未認証拒否を確認します。
 テスト用bindingは本番のプロビジョニングやsecret設定を検証しません。
 
 CIはLinux amd64、Linux arm64、macOS arm64のネイティブrunnerを定義しますが、定義の存在は実行成功の証拠ではありません。

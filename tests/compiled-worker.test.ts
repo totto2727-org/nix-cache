@@ -45,12 +45,50 @@ it("the compiled Alchemy Worker authenticates before reading its R2 binding", ()
         runtime.dispatchFetch("https://cache.test/nix-cache-info"),
       );
       expect(unauthorized.status).toBe(401);
+      // Identity encoding makes byte-length checks independent of edge compression.
       const authorized = yield* Effect.promise(() =>
         runtime.dispatchFetch("https://cache.test/nix-cache-info", {
-          headers: { authorization: `Basic ${Base64.encode("reader:test-secret")}` },
+          headers: {
+            authorization: `Basic ${Base64.encode("reader:test-secret")}`,
+            "accept-encoding": "identity",
+          },
         }),
       );
       expect(authorized.status).toBe(404);
       expect(authorized.headers.get("cache-control")).toBe("private, no-store");
+
+      const bucket = yield* Effect.promise(() => runtime.getR2Bucket("nix-cache-objects"));
+      const content = "StoreDir: /nix/store\n";
+      yield* Effect.promise(() => bucket.put("nix-cache-info", content));
+      const fetched = yield* Effect.promise(() =>
+        runtime.dispatchFetch("https://cache.test/nix-cache-info", {
+          headers: {
+            authorization: `Basic ${Base64.encode("reader:test-secret")}`,
+            "accept-encoding": "identity",
+          },
+        }),
+      );
+      expect(fetched.status).toBe(200);
+      expect(fetched.headers.get("content-length")).toBe(`${content.length}`);
+      expect(fetched.headers.get("cache-control")).toBe("private, no-store");
+      expect(yield* Effect.promise(() => fetched.text())).toBe(content);
+
+      yield* Effect.promise(() => bucket.delete("nix-cache-info"));
+      const warm = yield* Effect.promise(() =>
+        runtime.dispatchFetch("https://cache.test/nix-cache-info", {
+          headers: {
+            authorization: `Basic ${Base64.encode("reader:test-secret")}`,
+            "accept-encoding": "identity",
+          },
+        }),
+      );
+      expect(warm.status).toBe(200);
+      expect(warm.headers.get("content-length")).toBe(`${content.length}`);
+      expect(warm.headers.get("cache-control")).toBe("private, no-store");
+      expect(yield* Effect.promise(() => warm.text())).toBe(content);
+      const warmUnauthorized = yield* Effect.promise(() =>
+        runtime.dispatchFetch("https://cache.test/nix-cache-info"),
+      );
+      expect(warmUnauthorized.status).toBe(401);
     }),
   ));
