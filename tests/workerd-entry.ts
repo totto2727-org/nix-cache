@@ -1,7 +1,8 @@
 import type * as CF from "@cloudflare/workers-types";
-import { Redacted } from "effect";
-import { HttpEffect } from "effect/http";
-import { makeCacheHttpEffect } from "../src/cache";
+import { Effect, Layer, Redacted } from "effect";
+import { HttpEffect, HttpRouter } from "effect/http";
+import { CacheReader, CacheRoutes, CacheStorage } from "../src/cache";
+import { makeStorage } from "../src/cloudflare-storage";
 
 export default {
   // Native Request/Promise/proxy operations are confined to this workerd test
@@ -37,25 +38,40 @@ export default {
           })
         : env.BUCKET;
     const cache = (globalThis.caches as unknown as CF.CacheStorage).default;
+    const routes = CacheRoutes.pipe(
+      HttpRouter.provideRequest(
+        Layer.mergeAll(
+          Layer.succeed(
+            CacheStorage,
+            makeStorage({
+              bucket,
+              cache: {
+                async match(key, options) {
+                  if (request.headers.has("x-test-cache-match-failure"))
+                    throw new Error("Injected private cache read failure");
+                  return cache.match(key, options);
+                },
+                async put(key, response) {
+                  if (request.headers.has("x-test-cache-put-failure"))
+                    throw new Error("Injected private cache write failure");
+                  return cache.put(key, response);
+                },
+              },
+              waitUntil: (promise) => context.waitUntil(promise),
+            }),
+          ),
+          Layer.succeed(CacheReader, {
+            cacheNamespace: request.headers.get("x-test-cache-namespace") ?? "local-test-bucket",
+            username: Redacted.make("reader"),
+            password: Redacted.make("test-secret"),
+          }),
+        ),
+      ),
+    );
     return HttpEffect.toWebHandler(
-      makeCacheHttpEffect({
-        bucket,
-        cacheNamespace: "local-test-bucket",
-        cache: {
-          async match(key, options) {
-            if (request.headers.has("x-test-cache-match-failure"))
-              throw new Error("Injected private cache read failure");
-            return cache.match(key, options);
-          },
-          async put(key, response) {
-            if (request.headers.has("x-test-cache-put-failure"))
-              throw new Error("Injected private cache write failure");
-            return cache.put(key, response);
-          },
-        },
-        waitUntil: (promise) => context.waitUntil(promise),
-        username: Redacted.make("reader"),
-        password: Redacted.make("test-secret"),
+      Effect.gen(function* () {
+        const http = yield* HttpRouter.toHttpEffect(routes);
+        return yield* http;
       }),
     )(request);
   },

@@ -1,11 +1,9 @@
-import type * as CF from "@cloudflare/workers-types";
-import { Array, Context, Effect, Layer, Option, Record, Redacted, String } from "effect";
+import { Array, Context, Effect, Option, Record, Redacted, String } from "effect";
 import { Base64 } from "effect/encoding";
-import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
   credentialsMatch,
   httpDate,
-  makeStorage,
   uploaded,
   type Storage,
   type UpstreamFailure,
@@ -19,19 +17,19 @@ import {
   type ByteRange,
 } from "./http-policy";
 
-export interface CacheOptions {
-  readonly bucket: CF.R2Bucket;
-  readonly cache: Pick<CF.Cache, "match" | "put">;
-  readonly waitUntil: (promise: Promise<unknown>) => void;
-  readonly username: Redacted.Redacted<string>;
-  readonly cacheNamespace: string;
-  readonly password: Redacted.Redacted<string>;
-}
+export class CacheReader extends Context.Service<
+  CacheReader,
+  {
+    readonly username: Redacted.Redacted<string>;
+    readonly cacheNamespace: string;
+    readonly password: Redacted.Redacted<string>;
+  }
+>()("nix-cache/Reader") {}
 
 const narTtlSeconds = 365 * 24 * 60 * 60;
 const cacheInfoTtlSeconds = 60;
 const narinfoTtlSeconds = 5 * 60;
-class CacheStorage extends Context.Service<CacheStorage, Storage>()("nix-cache/Storage") {}
+export class CacheStorage extends Context.Service<CacheStorage, Storage>()("nix-cache/Storage") {}
 
 const privateHeaders = { "Cache-Control": "private, no-store", Vary: "Authorization" };
 const reply = (status: number, headers?: Readonly<Record<string, string>>) =>
@@ -187,40 +185,42 @@ const readObject = (
     return privateResponse(response, request.method);
   });
 
-const serve = (options: CacheOptions) =>
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const username = Redacted.value(options.username);
-    const password = Redacted.value(options.password);
-    if (!username || !password || String.includes(":")(username)) return reply(503);
-    const expected = `Basic ${Base64.encode(`${username}:${password}`)}`;
-    if (!credentialsMatch(request.headers["authorization"] ?? "", expected))
-      return reply(401, { "WWW-Authenticate": 'Basic realm="nix-cache", charset="UTF-8"' });
-    if (request.method !== "GET" && request.method !== "HEAD")
-      return reply(405, { Allow: "GET, HEAD" });
-    const url = HttpServerRequest.toURL(request);
-    if (Option.isNone(url) || url.value.search !== "") return reply(404);
-    const key = objectKey(url.value.pathname);
-    if (Option.isNone(key)) return reply(404);
-    // URI component encoding is the serialization boundary for the opaque cache
-    // namespace. Fixed origin prevents Host or credentials entering cache keys.
-    const cacheKey = `https://nix-cache.internal/${encodeURIComponent(options.cacheNamespace)}/${key.value}`;
-    const conditional = Array.some(
-      Record.keys<string, string>(request.headers),
-      String.startsWith("if-"),
-    );
-    const rangeHeader = request.method === "GET" ? request.headers["range"] : undefined;
-    if (!conditional && rangeHeader === undefined) {
-      const storage = yield* CacheStorage;
-      const cached = yield* storage.match(cacheKey);
-      if (Option.isSome(cached)) return privateResponse(cached.value, request.method);
-    }
-    return yield* readObject(request, key.value, cacheKey, conditional, rangeHeader);
-  });
-
-/** Effect HTTP composition root, also used by local workerd acceptance tests. */
-export const makeCacheHttpEffect = (options: CacheOptions) =>
-  serve(options).pipe(
-    Effect.provide(Layer.succeed(CacheStorage, makeStorage(options))),
-    Effect.catchTag("UpstreamFailure", () => Effect.succeed(reply(502))),
+const cacheObject = Effect.gen(function* () {
+  const reader = yield* CacheReader;
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const username = Redacted.value(reader.username);
+  const password = Redacted.value(reader.password);
+  if (!username || !password || String.includes(":")(username)) return reply(503);
+  const expected = `Basic ${Base64.encode(`${username}:${password}`)}`;
+  if (!credentialsMatch(request.headers["authorization"] ?? "", expected))
+    return reply(401, { "WWW-Authenticate": 'Basic realm="nix-cache", charset="UTF-8"' });
+  if (request.method !== "GET" && request.method !== "HEAD")
+    return reply(405, { Allow: "GET, HEAD" });
+  const url = HttpServerRequest.toURL(request);
+  if (Option.isNone(url) || url.value.search !== "") return reply(404);
+  const key = objectKey(url.value.pathname);
+  if (Option.isNone(key)) return reply(404);
+  // Native URL pathname preserves opaque R2 percent-encoded keys rather than
+  // decoded router parameters. Component encoding serializes both namespace
+  // and object key without URL canonicalization aliases at the Cache API boundary.
+  const cacheKey = `https://nix-cache.internal/${encodeURIComponent(reader.cacheNamespace)}/${encodeURIComponent(key.value)}`;
+  const conditional = Array.some(
+    Record.keys<string, string>(request.headers),
+    String.startsWith("if-"),
   );
+  const rangeHeader = request.method === "GET" ? request.headers["range"] : undefined;
+  if (!conditional && rangeHeader === undefined) {
+    const storage = yield* CacheStorage;
+    const cached = yield* storage.match(cacheKey);
+    if (Option.isSome(cached)) return privateResponse(cached.value, request.method);
+  }
+  return yield* readObject(request, key.value, cacheKey, conditional, rangeHeader);
+}).pipe(Effect.catchTag("UpstreamFailure", () => Effect.succeed(reply(502))));
+
+/** Concrete read endpoints, with storage and reader settings supplied by the entry point. */
+export const CacheRoutes = HttpRouter.addAll([
+  HttpRouter.route("*", "/nix-cache-info", cacheObject),
+  HttpRouter.route("*", "/:narinfo", cacheObject),
+  HttpRouter.route("*", "/nar/:nar", cacheObject),
+  HttpRouter.route("*", "/*", reply(404)),
+]);
