@@ -1,7 +1,10 @@
 import cloudflare from "@alchemy.run/cloudflare-runtime/vite";
+import { generateIgnorePatterns } from "@totto2727/gitignore-patterns";
 import { purePlugin } from "alchemy/Bundle/PurePlugin";
 import { Array, String } from "effect";
 import { defineConfig } from "vite-plus";
+
+const ignorePatterns = await generateIgnorePatterns(new URL(".", import.meta.url));
 
 const entry = "virtual:nix-cache/worker";
 const resolvedEntry = `\0${entry}`;
@@ -45,9 +48,9 @@ export default defineConfig({
       external: (id) => String.startsWith("cloudflare:")(id),
     },
   },
-  fmt: { ignorePatterns: ["pnpm-lock.yaml", "dist/**", "tmp/**"] },
+  fmt: { ignorePatterns: Array.append(ignorePatterns, "pnpm-lock.yaml") },
   lint: {
-    ignorePatterns: ["dist/**", "tmp/**"],
+    ignorePatterns,
     options: { typeAware: true, typeCheck: false },
   },
   test: {
