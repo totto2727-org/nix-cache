@@ -48,7 +48,7 @@ export default defineConfig({
       external: (id) => String.startsWith("cloudflare:")(id),
     },
   },
-  fmt: { ignorePatterns: Array.append(ignorePatterns, "pnpm-lock.yaml") },
+  fmt: { ignorePatterns },
   lint: {
     ignorePatterns,
     options: { typeAware: true, typeCheck: false },
