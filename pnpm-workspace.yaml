@@ -10,6 +10,4 @@ overrides:
   "vitest@*": 5.0.3
 
 allowBuilds:
-  esbuild: true
   workerd: true
-  msgpackr-extract: false
