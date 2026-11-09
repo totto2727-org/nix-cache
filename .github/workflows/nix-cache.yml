@@ -1,48 +1,24 @@
-name: Native cache validation
+name: CI
 
 on:
-  pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  native:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            system: x86_64-linux
-          - runner: ubuntu-24.04-arm
-            system: aarch64-linux
-          - runner: macos-15
-            system: aarch64-darwin
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # This shared action needs no application JavaScript dependencies.
-      - uses: totto2727-org/monorepo/.github/actions/setup-nix@c4f4a308d1a3f73f5d7cfc521184ab8777df3a7d
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          cache-url: ${{ vars.NIX_CACHE_URL }}
-          cache-public-key: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
-          cache-username: ${{ secrets.NIX_CACHE_USERNAME }}
-          cache-password: ${{ secrets.NIX_CACHE_PASSWORD }}
+          persist-credentials: false
+      - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
+        with:
           prepare-dev-shell: "false"
-      - name: Assert native Nix platform
-        env:
-          EXPECTED_SYSTEM: ${{ matrix.system }}
-        run: test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "$EXPECTED_SYSTEM"
-      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
-        with:
-          run-install: false
-      - name: Install project JavaScript environment
-        run: vp env install
-      - name: Install locked application dependencies
-        run: vp install --frozen-lockfile
-      - name: Check, build, and test the cache
+      - uses: totto2727-org/monorepo/.github/actions/setup-typescript@main
+      - name: Verify Vite+ project
         run: vp run ci

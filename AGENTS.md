@@ -20,6 +20,12 @@ Keep task orchestration in `vite.config.ts` as the single entry point.
 Do not duplicate task graphs in package scripts or independent orchestration scripts.
 Keep small runtime adapters separate only when the task runner cannot express their behavior.
 
+Follow the template CI policy: one `check` job on the standard GitHub-hosted `ubuntu-latest` runner for pull requests and pushes to `main`.
+Assume a public repository and stay within free GitHub Actions execution.
+Do not add an OS or CPU matrix, larger runners, deployment, or paid external services without an explicit requirement.
+Use the template's shared Nix and TypeScript setup actions.
+This project has no development flake, so disable development-shell preparation and run `vp run ci` directly.
+
 ## Effect-first implementation
 
 Write Effect programs, not imperative TypeScript enclosed in Effect wrappers.
