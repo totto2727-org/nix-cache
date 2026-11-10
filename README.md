@@ -32,6 +32,9 @@ flowchart LR
 公式[Vite+ CLI](https://vite.plus/)と、S3 binary cacheに対応したNixが必要です。
 JavaScript用のNode.jsとパッケージマネージャーは、Vite+にこのプロジェクトの`package.json`から解決させます。
 NixからVite+、Node.js、pnpmを追加して環境を重ねないでください。
+Node.jsは`.node-version`でテンプレートと同じ26.7.0へ固定し、pnpmは`packageManager`で11.21.0へ固定しています。
+開発用flakeはlibraryテンプレートと同じNixツール専用shellです。
+`direnv allow`または`nix develop`で読み込み、CIではhookを実行しない`nix develop .#ci`を使えます。
 
 ```bash
 vp env install
@@ -194,7 +197,7 @@ steps:
       cache-public-key: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
       cache-username: ${{ secrets.NIX_CACHE_USERNAME }}
       cache-password: ${{ secrets.NIX_CACHE_PASSWORD }}
-      prepare-dev-shell: "false"
+      prepare-dev-shell: 'false'
   - run: nix build .#YOUR_PACKAGE
 ```
 
@@ -230,10 +233,11 @@ steps:
 テスト用bindingは本番のプロビジョニングやsecret設定を検証しません。
 
 通常CIは代表環境のLinux amd64 1件で、既存の整形・型検査・ビルド・テストを実行します。
-共有セットアップactionはテンプレートと同じものを使いますが、このアプリケーションには開発flakeがないため、Nix shell準備と `nix print-dev-env` は実行しません。
+共有セットアップactionはテンプレートと同じものを使い、`ci` shellを準備して `nix print-dev-env` で読み込みます。
 Nixは実Nixを使うfixture検証のために導入し、Vite+・Node.js・pnpmはNixで提供しません。
 実Cloudflareへの公開、クラウド上のpush/pull、課金特性の検証は別途必要です。
 実装時の品質方針は[AGENTS.md](AGENTS.md)にまとめています。
+共通設定の基準とWorker固有の差分は[テンプレート整合方針](docs/template-alignment.md)を参照してください。
 
 ### 参考資料
 

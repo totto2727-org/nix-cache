@@ -14,6 +14,7 @@ Do not modify sibling projects as part of this application's work.
 
 Use the official Vite+ CLI and project-managed JavaScript tools.
 Use `vp env install`, `vp env current`, and `vp install --frozen-lockfile` from the repository root.
+Use the library-template Nix development shell for Nix tooling and formatting only.
 Do not provision Vite+, Node.js, or pnpm through Nix.
 Use `vp run dev`, `vp run check`, `vp run test`, and `vp run ci` for the configured tasks.
 Keep task orchestration in `vite.config.ts` as the single entry point.
@@ -24,7 +25,9 @@ Follow the template CI policy: one `check` job on the standard GitHub-hosted `ub
 Assume a public repository and stay within free GitHub Actions execution.
 Do not add an OS or CPU matrix, larger runners, deployment, or paid external services without an explicit requirement.
 Use the template's shared Nix and TypeScript setup actions.
-This project has no development flake, so disable development-shell preparation and run `vp run ci` directly.
+Prepare the `ci` development shell with the shared Nix action, load it with `nix print-dev-env`, and run `vp run ci`.
+Keep the template Node pin, pnpm version, Vite+ catalog, strict TypeScript presets, and formatter/linter settings aligned.
+Document necessary application-specific differences in [docs/template-alignment.md](docs/template-alignment.md).
 
 ## Effect-first implementation
 

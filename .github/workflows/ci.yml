@@ -16,7 +16,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
         with:
-          prepare-dev-shell: "false"
+          dev-shell: ci
       - uses: totto2727-org/monorepo/.github/actions/setup-typescript@main
       - name: Verify Vite+ project
-        run: vp run ci
+        run: |
+          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#ci")"
+          vp run ci
