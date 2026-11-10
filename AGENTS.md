@@ -26,7 +26,7 @@ Assume a public repository and stay within free GitHub Actions execution.
 Do not add an OS or CPU matrix, larger runners, deployment, or paid external services without an explicit requirement.
 Use the template's shared Nix and TypeScript setup actions.
 Prepare the `ci` development shell with the shared Nix action, load it with `nix print-dev-env`, and run `vp run ci`.
-Keep the template Node pin, pnpm version, Vite+ catalog, strict TypeScript presets, and formatter/linter settings aligned.
+Keep the template pnpm version, Vite+ catalog, strict TypeScript presets, and formatter/linter settings aligned.
 
 ## Effect-first implementation
 

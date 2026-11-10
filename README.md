@@ -32,7 +32,7 @@ flowchart LR
 公式[Vite+ CLI](https://vite.plus/)と、S3 binary cacheに対応したNixが必要です。
 JavaScript用のNode.jsとパッケージマネージャーは、Vite+にこのプロジェクトの`package.json`から解決させます。
 NixからVite+、Node.js、pnpmを追加して環境を重ねないでください。
-Node.jsは`.node-version`でテンプレートと同じ26.7.0へ固定し、pnpmは`packageManager`で11.21.0へ固定しています。
+pnpmは`packageManager`で11.21.0へ固定しています。
 開発用flakeはlibraryテンプレートと同じNixツール専用shellです。
 `direnv allow`または`nix develop`で読み込み、CIではhookを実行しない`nix develop .#ci`を使えます。
 
