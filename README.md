@@ -83,9 +83,41 @@ URLと署名公開鍵は共有できますが、秘密鍵、R2資格情報、net
 
 > [!WARNING]
 > `Redacted`はログ表示の秘匿化であり、state保存時の暗号化保証ではありません。
-> このStackはローカルstateを使い、AlchemyのstateエンコーダーはRedactedの内部値も保存します。
+> `production` stageは公式の`Cloudflare.state()`を使い、それ以外のstageはローカルstateを使います。
+> AlchemyのstateエンコーダーはRedactedの内部値も保存するため、Cloudflare側のstateも秘密情報として扱ってください。
 > `.alchemy/`、環境ファイル、認証profile、バックアップ、CI artifactを秘密情報として保護してください。
-> 複数端末やCIから更新する前に、stateの安全な永続化・共有と更新の直列化を設計してください。
+> 同じstackとstageへの更新は直列化し、CIデプロイ中に手動デプロイを並行実行しないでください。
+
+### 本番の自動デプロイを設定する
+
+運用者向けの手順です。
+`.github/workflows/deploy.yml`は通常CIとは別に実行します。
+同じリポジトリの`main`へのpushで`CI`が成功した場合だけ、検証済みのcommitをcheckoutして`nix-cache` stackの`production` stageへ適用します。
+PRやpreview stageはデプロイしません。
+既存のWorkerと非公開R2の宣言を使い、新しい公開ドメインは追加しません。
+通常CIの実Nix・workerdによる検証は変更しません。
+
+GitHub Environment `production`に、次の値を設定してください。
+
+| 種類     | 名前                    | 用途                                |
+| -------- | ----------------------- | ----------------------------------- |
+| Variable | `CLOUDFLARE_ACCOUNT_ID` | 本番Cloudflareアカウント            |
+| Secret   | `CLOUDFLARE_API_TOKEN`  | Worker、R2、公式state backendの管理 |
+| Secret   | `NIX_CACHE_USERNAME`    | Workerの読み取りユーザー名          |
+| Secret   | `NIX_CACHE_PASSWORD`    | Workerの読み取りパスワード          |
+
+現在の実装はパスワードを使い、`NIX_CACHE_PASSWORD_HASH`は読み取りません。
+これらの値は依存関係のインストール後、デプロイstepだけへ渡します。
+R2 S3アクセスキーとNix署名秘密鍵は、このworkflowには渡しません。
+workflowは`contents: read`だけを許可し、実行中のデプロイを中断せず直列化します。
+stateや認証profileをGitHub artifactへアップロードしません。
+
+初回実行を許可する前に、本番アカウントと既存の`nix-cache/production` stateの所在を確認してください。
+ローカルstateで設置済みの場合、同じstackとstageのstateを公式Cloudflare backendへ移行し、既存リソースとの対応を確認してから自動デプロイを有効にしてください。
+空のstateへの切り替えを移行の代わりにせず、既存R2を再作成したり削除したりしないでください。
+Alchemy beta.81の`--yes`は公式state storeが未設置ならbootstrapし、古ければ更新するため、その操作に必要な権限と承認も確認してください。
+実デプロイとstate移行には運用者の承認が必要です。
+認証・権限が不足する場合は停止し、運用者が修正してください。
 
 ### 設置を実行する
 
