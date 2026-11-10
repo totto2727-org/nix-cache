@@ -1,15 +1,18 @@
 packages:
   - .
 
+catalog:
+  vite-plus: 1.1.0
+
 minimumReleaseAge: 1440
 minimumReleaseAgeStrict: true
 
 # Vite+ requires its matching Vite core and Vitest versions.
 overrides:
-  "vite@*": npm:@voidzero-dev/vite-plus-core@1.1.0
-  "vitest@*": 5.0.3
+  'vite@*': npm:@voidzero-dev/vite-plus-core@1.1.0
+  'vitest@*': 5.0.3
 
 allowBuilds:
-  esbuild: true
+  vite-plus: false
+  # Miniflare's real workerd runtime validates its platform binary during installation.
   workerd: true
-  msgpackr-extract: false
