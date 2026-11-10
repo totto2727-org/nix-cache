@@ -74,11 +74,17 @@ export default defineConfig({
   run: {
     tasks: {
       dev: { command: 'alchemy dev --config alchemy.run.ts --no-input', cache: false },
-      build: { command: 'vp build', cache: false },
-      check: { command: 'vp check', cache: false },
-      fix: { command: 'vp check --fix', cache: false },
-      test: { command: 'vp test run', dependsOn: ['build'], cache: false },
-      ci: { command: '', dependsOn: ['check', 'test'], cache: false },
+      build: {
+        command: 'vp build',
+        cache: {
+          input: [{ auto: true }, '!dist/**'],
+          output: ['dist/**'],
+        },
+      },
+      check: { command: 'vp check' },
+      fix: { command: 'vp check --fix' },
+      test: { command: 'vp test run', dependsOn: ['build'] },
+      ci: { command: '', dependsOn: ['check', 'test'] },
     },
   },
 })
