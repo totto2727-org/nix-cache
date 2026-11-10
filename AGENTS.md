@@ -27,7 +27,6 @@ Do not add an OS or CPU matrix, larger runners, deployment, or paid external ser
 Use the template's shared Nix and TypeScript setup actions.
 Prepare the `ci` development shell with the shared Nix action, load it with `nix print-dev-env`, and run `vp run ci`.
 Keep the template Node pin, pnpm version, Vite+ catalog, strict TypeScript presets, and formatter/linter settings aligned.
-Document necessary application-specific differences in [docs/template-alignment.md](docs/template-alignment.md).
 
 ## Effect-first implementation
 

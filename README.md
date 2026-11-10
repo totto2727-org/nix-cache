@@ -237,7 +237,6 @@ steps:
 Nixは実Nixを使うfixture検証のために導入し、Vite+・Node.js・pnpmはNixで提供しません。
 実Cloudflareへの公開、クラウド上のpush/pull、課金特性の検証は別途必要です。
 実装時の品質方針は[AGENTS.md](AGENTS.md)にまとめています。
-共通設定の基準とWorker固有の差分は[テンプレート整合方針](docs/template-alignment.md)を参照してください。
 
 ### 参考資料
 
