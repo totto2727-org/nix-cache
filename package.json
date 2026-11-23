@@ -10,20 +10,20 @@
   },
   "devDependencies": {
     "@alchemy.run/cloudflare-runtime": "^2.0.0-beta.81",
-    "@cloudflare/workers-types": "^5.20261009.1",
+    "@cloudflare/workers-types": "^5.20261121.1",
     "@totto2727/gitignore-patterns": "^0.1.0",
     "@totto2727/oxlint": "^0.2.0",
-    "@tsconfig/node-ts": "^23.6.4",
-    "@tsconfig/strictest": "^2.0.8",
-    "@types/node": "^24.19.1",
+    "@tsconfig/node-ts": "^23.6.5",
+    "@tsconfig/strictest": "^2.0.9",
+    "@types/node": "^24.19.2",
     "miniflare": "^5.20261006.1-alpha",
     "typescript": "^7.0.2",
-    "vite": "npm:@voidzero-dev/vite-plus-core@^1.1.0",
+    "vite": "npm:@voidzero-dev/vite-plus-core@^8.3.8000",
     "vite-plus": "catalog:",
-    "vitest": "^5.0.3"
+    "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=26"
   },
-  "packageManager": "pnpm@11.21.0"
+  "packageManager": "pnpm@11.29.0"
 }
