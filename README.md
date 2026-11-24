@@ -32,6 +32,9 @@ flowchart LR
 公式[Vite+ CLI](https://vite.plus/)と、S3 binary cacheに対応したNixが必要です。
 JavaScript用のNode.jsとパッケージマネージャーは、Vite+にこのプロジェクトの`package.json`から解決させます。
 NixからVite+、Node.js、pnpmを追加して環境を重ねないでください。
+pnpmは`packageManager`で11.21.0へ固定しています。
+開発用flakeはlibraryテンプレートと同じNixツール専用shellです。
+`direnv allow`または`nix develop`で読み込み、CIではhookを実行しない`nix develop .#ci`を使えます。
 
 ```bash
 vp env install
@@ -172,7 +175,10 @@ flakeの`nixConfig.extra-substituters`と`extra-trusted-public-keys`には公開
 
 ## 5. 利用CIに組み込む
 
-このリポジトリのCIは、以下を設定すると読み取りキャッシュを利用します。
+CIはテンプレートに合わせ、公開リポジトリの標準GitHub-hosted `ubuntu-latest` で `check` 1ジョブのみを実行します。
+全OS・CPUのmatrix、有料のlarger runner、実Cloudflareへのデプロイは通常CIに含めません。
+このアプリケーション自体のCIは、外部キャッシュの資格情報を必要としません。
+利用側CIで読み取りキャッシュを有効にする場合は、以下を設定します。
 書き込みや署名のjobではありません。
 
 - Repository variables: `NIX_CACHE_URL`と`NIX_CACHE_PUBLIC_KEY`。
@@ -191,15 +197,15 @@ steps:
       cache-public-key: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
       cache-username: ${{ secrets.NIX_CACHE_USERNAME }}
       cache-password: ${{ secrets.NIX_CACHE_PASSWORD }}
-      prepare-dev-shell: "false"
+      prepare-dev-shell: 'false'
   - run: nix build .#YOUR_PACKAGE
 ```
 
 共有actionがNix設定と保護されたnetrcを生成するため、利用者がこのアプリケーションをcheckoutしたり、Vite+やNode.jsを準備したりする必要はありません。
-このリポジトリの開発CIでは、共有actionの後にVite+とアプリケーション依存関係を準備します。
+このリポジトリの開発CIでは、テンプレートと同じ `setup-nix@main` と `setup-typescript@main` を使い、Vite+とアプリケーション依存関係を準備します。
 
 > [!IMPORTANT]
-> 共有actionは公開済みの固定commitを参照します。
+> 上の利用側CIの例は、公開済みの固定commitを参照します。
 > 共有actionのコミット`c4f4a308d1a3f73f5d7cfc521184ab8777df3a7d`は公開済みです。monorepo側の変更は[PR #393](https://github.com/totto2727-org/monorepo/pull/393)で確認できます。
 > このCI定義を実行成功の証拠として扱わないでください。
 
@@ -226,7 +232,9 @@ steps:
 通常の`vp run test`にはビルドとコンパイル済みWorkerの検証も含まれ、Alchemy bridgeをworkerdで起動して401・404、R2取得の200とContent-Length、元オブジェクト削除後のキャッシュ取得と未認証拒否を確認します。
 テスト用bindingは本番のプロビジョニングやsecret設定を検証しません。
 
-CIはLinux amd64、Linux arm64、macOS arm64のネイティブrunnerを定義しますが、定義の存在は実行成功の証拠ではありません。
+通常CIは代表環境のLinux amd64 1件で、既存の整形・型検査・ビルド・テストを実行します。
+共有セットアップactionはテンプレートと同じものを使い、`ci` shellを準備して `nix print-dev-env` で読み込みます。
+Nixは実Nixを使うfixture検証のために導入し、Vite+・Node.js・pnpmはNixで提供しません。
 実Cloudflareへの公開、クラウド上のpush/pull、課金特性の検証は別途必要です。
 実装時の品質方針は[AGENTS.md](AGENTS.md)にまとめています。
 

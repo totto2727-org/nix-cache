@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: totto2727-org/monorepo/.github/actions/setup-nix@main
+        with:
+          dev-shell: ci
+      - uses: totto2727-org/monorepo/.github/actions/setup-typescript@main
+      - name: Verify Vite+ project
+        run: |
+          eval "$(nix print-dev-env "$GITHUB_WORKSPACE#ci")"
+          vp run ci
