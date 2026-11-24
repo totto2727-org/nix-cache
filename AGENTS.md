@@ -18,6 +18,9 @@ Use the library-template Nix development shell for Nix tooling and formatting on
 Do not provision Vite+, Node.js, or pnpm through Nix.
 Use `vp run dev`, `vp run check`, `vp run test`, and `vp run ci` for the configured tasks.
 Keep task orchestration in `vite.config.ts` as the single entry point.
+Build the Worker through the Alchemy source provider declared on the production Worker.
+Exercise that artifact in Workerd with local bindings.
+Keep source bundling and deployed handler composition out of test fixtures.
 Do not duplicate task graphs in package scripts or independent orchestration scripts.
 Keep small runtime adapters separate only when the task runner cannot express their behavior.
 

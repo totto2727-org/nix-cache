@@ -1,43 +1,68 @@
+// oxlint-disable-next-line rules/no-node-imports -- Node crypto supplies the constant-time comparator for fixed-size credential digests.
 import { createHash, timingSafeEqual } from 'node:crypto'
 
 import type * as CF from '@cloudflare/workers-types'
 import type { ObjectBody, R2Object } from 'alchemy/Cloudflare/R2'
-import { DateTime, Effect, Option, Schema } from 'effect'
+import { Context, DateTime, Effect, Option, Predicate, Schema } from 'effect'
 import { HttpServerResponse } from 'effect/http'
 
 // Fixed-size SHA-256 digests preserve timing-safe comparison for arbitrary
-// credential lengths. Native crypto is required for timingSafeEqual.
-export const credentialsMatch = (supplied: string, expected: string) =>
-  timingSafeEqual(createHash('sha256').update(supplied).digest(), createHash('sha256').update(expected).digest())
+// Credential lengths. Native crypto is required for timingSafeEqual.
+const digest = (value: string): Uint8Array => {
+  const hash = createHash('sha256')
+  hash.update(value)
+  return hash.digest()
+}
 
-export const uploaded = (object: Pick<R2Object, 'uploaded'>) => DateTime.fromDateUnsafe(object.uploaded)
+export const credentialsMatch = (supplied: string, expected: string): boolean =>
+  timingSafeEqual(digest(supplied), digest(expected))
+
+export const uploaded = (object: Pick<R2Object, 'uploaded'>): DateTime.Utc => DateTime.fromDateUnsafe(object.uploaded)
 
 // Effect has no HTTP IMF-fixdate formatter. Date conversion stays here, solely
-// for the RFC 9110 wire representation, never for comparisons or parsing.
-export const httpDate = (value: DateTime.Utc) => DateTime.toDateUtc(value).toUTCString()
+// For the RFC 9110 wire representation, never for comparisons or parsing.
+export const httpDate = (value: DateTime.Utc): string => DateTime.toDateUtc(value).toUTCString()
 
-// fromWeb converts bodies into Effect Streams. Workerd then loses the native
-// fixed-length stream marker and drops Content-Length. Preserve the native body
-// only at this adapter, with explicit Effect body metadata for header updates.
+// FromWeb converts bodies into Effect Streams. Workerd then loses the native
+// Fixed-length stream marker and drops Content-Length. Preserve the native body
+// Only at this adapter, with explicit Effect body metadata for header updates.
 const contentLengthFromHeader = Schema.decodeUnknownOption(Schema.NumberFromString)
 
-const fromCloudflare = (response: Response) =>
-  HttpServerResponse.raw(response.body, {
-    status: response.status,
-    headers: response.headers,
+const fromCloudflare = (response: Response): HttpServerResponse.HttpServerResponse => {
+  const contentLength = contentLengthFromHeader(response.headers.get('content-length'))
+  return HttpServerResponse.raw(response.body, {
+    contentLength: Option.getOrUndefined(contentLength),
     contentType: response.headers.get('content-type') ?? undefined,
-    contentLength: Option.getOrUndefined(contentLengthFromHeader(response.headers.get('content-length'))),
+    headers: response.headers,
+    status: response.status,
   })
+}
 
-export const makeResponseCache = (options: {
-  readonly cache: Pick<CF.Cache, 'match' | 'put'>
-  readonly waitUntil: (promise: Promise<unknown>) => void
-}) => ({
+export const defaultNativeCache = (): CF.Cache =>
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Workerd adds the default cache to the standard CacheStorage interface.
+  (globalThis.caches as unknown as CF.CacheStorage).default
+
+interface ResponseCache {
+  match: (key: string) => Effect.Effect<Option.Option<HttpServerResponse.HttpServerResponse>>
+  put: (
+    key: string,
+    response: HttpServerResponse.HttpServerResponse,
+  ) => Effect.Effect<HttpServerResponse.HttpServerResponse>
+}
+interface ResponseCacheOptions {
+  cache: Pick<CF.Cache, 'match' | 'put'>
+  waitUntil: (promise: Promise<unknown>) => void
+}
+
+const fromNativeResponse = (response: CF.Response): HttpServerResponse.HttpServerResponse =>
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Worker Cache and the global HTTP runtime expose the same native Response with different ambient types.
+  fromCloudflare(response as unknown as Response)
+
+export const makeResponseCache = (options: ResponseCacheOptions): ResponseCache => ({
   match: (key: string) =>
-    Effect.tryPromise(() => options.cache.match(key)).pipe(
-      Effect.map((response) =>
-        Option.fromNullishOr(response).pipe(Option.map((value) => fromCloudflare(value as unknown as Response))),
-      ),
+    Effect.tryPromise(async () => options.cache.match(key)).pipe(
+      Effect.map(Option.fromNullishOr),
+      Effect.map(Option.map(fromNativeResponse)),
       Effect.orElseSucceed(() => Option.none()),
     ),
   // Cache API needs a cloneable native Response and waitUntil needs a Promise.
@@ -46,29 +71,37 @@ export const makeResponseCache = (options: {
     Effect.sync(() => {
       const web = HttpServerResponse.toWeb(response)
       const cached = web.clone()
-      options.waitUntil(
-        Effect.runPromise(
-          Effect.tryPromise(() => options.cache.put(key, cached as unknown as CF.Response)).pipe(
-            Effect.catch(() => Effect.logWarning('Nix cache write failed')),
-          ),
-        ),
+      const write = Effect.tryPromise(async () => {
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Cache.put accepts this exact workerd Response; the global and Cloudflare types are declared separately.
+        await options.cache.put(key, cached as unknown as CF.Response)
+      })
+      const reportedWrite = write.pipe(
+        Effect.tapError(() => Effect.logWarning('Nix cache write failed')),
+        Effect.ignore,
       )
+      // oxlint-disable-next-line rules/no-effect-runtime-run -- Workerd waitUntil owns the background cache write and requires a Promise.
+      const pendingWrite = Effect.runPromise(reportedWrite)
+      options.waitUntil(pendingWrite)
       return fromCloudflare(web)
     }),
 })
 
 // Alchemy exposes the original R2 readable for zero-copy native HTTP forwarding.
 // Effect stream fallback supports clients without a native stream, without buffering.
+interface ObjectResponseOptions {
+  headers: Readonly<Record<string, string>>
+  status: number
+  contentLength: number
+}
+
 export const objectResponse = (
   object: Pick<ObjectBody, 'readable' | 'body'>,
-  headers: Readonly<Record<string, string>>,
-  status: number,
-  contentLength: number,
-) => {
-  const options = { status, headers, contentLength, contentType: headers['Content-Type'] }
-  return object.readable === undefined
+  { headers, status, contentLength }: ObjectResponseOptions,
+): HttpServerResponse.HttpServerResponse => {
+  const options = { contentLength, contentType: headers['Content-Type'], headers, status }
+  return Predicate.isNullish(object.readable)
     ? HttpServerResponse.stream(object.body, options)
     : HttpServerResponse.raw(object.readable, options)
 }
 
-export type ResponseCache = ReturnType<typeof makeResponseCache>
+export class CacheStorage extends Context.Service<CacheStorage, ResponseCache>()('nix-cache/ResponseCache') {}

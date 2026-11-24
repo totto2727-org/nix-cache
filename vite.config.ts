@@ -1,55 +1,12 @@
-import cloudflare from '@alchemy.run/cloudflare-runtime/vite'
 import { generateIgnorePatterns } from '@totto2727/gitignore-patterns'
-import { purePlugin } from 'alchemy/Bundle/PurePlugin'
-import { Array, String } from 'effect'
+import preset from '@totto2727/oxlint/preset/application'
 import { defineConfig } from 'vite-plus'
 
 const ignorePatterns = await generateIgnorePatterns(new URL('.', import.meta.url))
 
-const entry = 'virtual:nix-cache/worker'
-const resolvedEntry = `\0${entry}`
-
+// oxlint-disable-next-line import/no-default-export -- Vite+ loads the configuration from the module default.
 export default defineConfig({
-  plugins: [
-    purePlugin(),
-    // Alchemy injects its own host, and Vitest tests own their Miniflare runtime.
-    process.env['ALCHEMY_CLOUDFLARE_VITE_INJECTED'] === '1' || process.env['VITEST']
-      ? null
-      : cloudflare({ compatibilityDate: '2026-09-25', compatibilityFlags: ['nodejs_compat'] }),
-    {
-      name: 'nix-cache:alchemy-worker',
-      config: () => ({
-        define: { 'globalThis.__ALCHEMY_RUNTIME__': 'true' },
-        resolve: { dedupe: ['effect'] },
-      }),
-      resolveId: (id) => (id === entry ? resolvedEntry : undefined),
-      load: (id) => {
-        if (id !== resolvedEntry) return
-        return Array.join(
-          [
-            'import { env, WorkerEntrypoint } from "cloudflare:workers";',
-            'import { makeWorkerBridge } from "alchemy/Cloudflare/Bridge";',
-            'import entrypoint from "/src/entry.workers.ts";',
-            'const stack = { name: env.ALCHEMY_STACK_NAME, stage: env.ALCHEMY_STAGE };',
-            'if (!stack.name || !stack.stage) throw new Error("Start the Worker with alchemy dev.");',
-            'export default makeWorkerBridge(WorkerEntrypoint, { entrypoint, stack });',
-          ],
-          '\n',
-        )
-      },
-    },
-  ],
-  ssr: { noExternal: true },
-  build: {
-    ssr: true,
-    target: 'esnext',
-    rolldownOptions: {
-      input: { index: entry },
-      external: (id) => String.startsWith('cloudflare:')(id),
-    },
-  },
   fmt: {
-    ignorePatterns,
     arrowParens: 'always',
     experimentalSortImports: {
       ignoreCase: true,
@@ -57,6 +14,7 @@ export default defineConfig({
       order: 'asc',
     },
     experimentalSortPackageJson: true,
+    ignorePatterns,
     jsxSingleQuote: true,
     printWidth: 120,
     proseWrap: 'preserve',
@@ -64,27 +22,37 @@ export default defineConfig({
     singleQuote: true,
   },
   lint: {
+    env: { node: true },
+    extends: [preset],
     ignorePatterns,
     options: { typeAware: true, typeCheck: true },
-  },
-  test: {
-    include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
-    testTimeout: 30_000,
+    overrides: [
+      {
+        // An ambient Workerd module declaration must be a script in the Node host type program.
+        files: ['tests/workerd-runtime.d.ts'],
+        plugins: ['import'],
+        rules: { 'import/unambiguous': 'off' },
+      },
+    ],
   },
   run: {
     tasks: {
-      dev: { command: 'alchemy dev --config alchemy.run.ts --no-input', cache: false },
       build: {
-        command: 'vp build',
         cache: {
           input: [{ auto: true }, '!dist/**'],
           output: ['dist/**'],
         },
+        command: 'node scripts/build-worker.ts',
       },
       check: { command: 'vp check' },
+      ci: { command: '', dependsOn: ['check', 'test'] },
+      dev: { cache: false, command: 'alchemy dev --config alchemy.run.ts --no-input' },
       fix: { command: 'vp check --fix' },
       test: { command: 'vp test run', dependsOn: ['build'] },
-      ci: { command: '', dependsOn: ['check', 'test'] },
     },
+  },
+  test: {
+    dir: 'tests',
+    testTimeout: 30_000,
   },
 })

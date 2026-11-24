@@ -260,9 +260,10 @@ steps:
 `vp run test`はMiniflareの実workerd、ローカルR2、Cache APIを使い、実NixのS3 pushと認証付きHTTP pullを別のローカルbinary cacheへ往復させてNARを比較します。
 誤った資格情報の拒否も検証します。
 これはローカルfixtureによる検証で、WorkerにS3ゲートウェイやSigV4検証があることを意味しません。
-`vp run build`はUIなしのWorker artifactを`dist/ssr/`へ生成します。
-通常の`vp run test`にはビルドとコンパイル済みWorkerの検証も含まれ、Alchemy bridgeをworkerdで起動して401・404、R2取得の200とContent-Length、元オブジェクト削除後のキャッシュ取得と未認証拒否を確認します。
-テスト用bindingは本番のプロビジョニングやsecret設定を検証しません。
+`vp run build`は、本番デプロイで指定するWorkerと同じAlchemy source providerをオフラインで実行し、`dist/worker/`にモジュールとハッシュ付きmanifestを出力します。
+`vp run test`はmanifestに記録された成果物をそのままworkerdで起動し、認証、R2読み取り、Range、キャッシュ、実Nixの往復を検証します。
+障害テストではworkerdのbindingを差し替えて、同じWorkerの処理を呼び出します。
+ビルドとテストはCloudflareへの接続やデプロイを必要としません。
 
 通常CIは代表環境のLinux amd64 1件で、既存の整形・型検査・ビルド・テストを実行します。
 共有セットアップactionはテンプレートと同じものを使い、`ci` shellを準備して `nix print-dev-env` で読み込みます。

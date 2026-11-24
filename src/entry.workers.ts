@@ -1,26 +1,25 @@
-import type { CacheStorage as NativeCacheStorage } from '@cloudflare/workers-types'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import { WorkerExecutionContext } from 'alchemy/Cloudflare/Workers'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Config, Effect, Layer } from 'effect'
 import { HttpRouter } from 'effect/http'
 
-import { CacheBucket, CacheReader, CacheRoutes, CacheStorage } from './cache'
-import { makeResponseCache } from './cloudflare-storage'
+import { CacheBucket } from './cache-bucket.ts'
+import { CacheReader } from './cache-reader.ts'
+import { CacheRoutes } from './cache.ts'
+import { CacheStorage, defaultNativeCache, makeResponseCache } from './cloudflare-storage.ts'
+import { bucketId, workerId, workerProps } from './worker-settings.ts'
 
-export class Worker extends Cloudflare.Worker<Worker, Cloudflare.WorkerShape>()('nix-cache-reader') {}
+export class Worker extends Cloudflare.Worker<Worker, Cloudflare.WorkerShape>()(workerId) {}
 
+// oxlint-disable-next-line import/no-default-export -- The Alchemy bundler loads the Worker resource from the entry module default.
 export default Worker.make(
-  {
-    main: import.meta.url,
-    compatibility: { date: '2026-09-25', flags: ['nodejs_compat'] },
-    vite: {},
-  },
+  workerProps,
   Effect.gen(function* () {
-    const bucket = yield* Cloudflare.R2.Bucket('nix-cache-objects', {
-      publicAccess: false,
+    const bucket = yield* Cloudflare.R2.Bucket(bucketId, {
       domains: [],
       forceDestroy: false,
+      publicAccess: false,
     })
     const accountId = yield* bucket.accountId
     const bucketName = yield* bucket.bucketName
@@ -34,28 +33,25 @@ export default Worker.make(
         // Alchemy clients resolve deferred bindings against this live request context.
         const runtime = yield* RuntimeContext
         const context = yield* WorkerExecutionContext
-        const routes = CacheRoutes.pipe(
-          HttpRouter.provideRequest(
-            Layer.mergeAll(
-              Layer.succeed(CacheBucket, reader),
-              Layer.succeed(RuntimeContext, runtime),
-              Layer.succeed(
-                CacheStorage,
-                makeResponseCache({
-                  // Workers Cache checks before fetch and only exposes purge, so
-                  // explicit Cache API access is required after endpoint authentication.
-                  cache: (globalThis.caches as unknown as NativeCacheStorage).default,
-                  waitUntil: (promise: Promise<unknown>) => context.raw.waitUntil(promise),
-                }),
-              ),
-              Layer.succeed(CacheReader, {
-                cacheNamespace: `${yield* accountId}/${yield* bucketName}`,
-                username,
-                password,
-              }),
-            ),
-          ),
+        const responseCache = makeResponseCache({
+          // Explicit Cache API access is required after endpoint authentication.
+          cache: defaultNativeCache(),
+          waitUntil: (promise: Promise<unknown>) => {
+            context.raw.waitUntil(promise)
+          },
+        })
+        const readerConfig = {
+          cacheNamespace: `${yield* accountId}/${yield* bucketName}`,
+          password,
+          username,
+        }
+        const services = Layer.mergeAll(
+          Layer.succeed(CacheBucket, reader),
+          Layer.succeed(RuntimeContext, runtime),
+          Layer.succeed(CacheStorage, responseCache),
+          Layer.succeed(CacheReader, readerConfig),
         )
+        const routes = CacheRoutes.pipe(HttpRouter.provideRequest(services))
         const http = yield* HttpRouter.toHttpEffect(routes)
         return yield* http
       }).pipe(Effect.orDie),
