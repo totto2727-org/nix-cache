@@ -1,21 +1,26 @@
-// oxlint-disable-next-line rules/no-node-imports -- Node crypto supplies the constant-time comparator for fixed-size credential digests.
-import { createHash, timingSafeEqual } from 'node:crypto'
-
 import type * as CF from '@cloudflare/workers-types'
 import type { ObjectBody, R2Object } from 'alchemy/Cloudflare/R2'
-import { Context, DateTime, Effect, Option, Predicate, Schema } from 'effect'
+import { Cause, Context, DateTime, Effect, Option, Predicate, Schema } from 'effect'
 import { HttpServerResponse } from 'effect/http'
 
-// Fixed-size SHA-256 digests preserve timing-safe comparison for arbitrary
-// Credential lengths. Native crypto is required for timingSafeEqual.
-const digest = (value: string): Uint8Array => {
-  const hash = createHash('sha256')
-  hash.update(value)
-  return hash.digest()
-}
+const digest = (value: string): Effect.Effect<ArrayBuffer, Cause.UnknownError> =>
+  Effect.tryPromise(async () => crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
 
-export const credentialsMatch = (supplied: string, expected: string): boolean =>
-  timingSafeEqual(digest(supplied), digest(expected))
+// SHA-256 produces equal-length digests of the UTF-8 credentials.
+// Workerd supplies the native timingSafeEqual extension to SubtleCrypto.
+export const credentialsMatch = (supplied: string, expected: string): Effect.Effect<boolean, Cause.UnknownError> =>
+  Effect.gen(function* () {
+    const [suppliedDigest, expectedDigest] = yield* Effect.all([digest(supplied), digest(expected)], {
+      concurrency: 'unbounded',
+    })
+    return yield* Effect.try(() => {
+      const subtle: SubtleCrypto & Partial<Pick<CF.SubtleCrypto, 'timingSafeEqual'>> = crypto.subtle
+      if (!Predicate.isFunction(subtle.timingSafeEqual)) {
+        throw new Cause.UnknownError(undefined, 'Workerd timingSafeEqual is unavailable')
+      }
+      return subtle.timingSafeEqual(suppliedDigest, expectedDigest)
+    })
+  })
 
 export const uploaded = (object: Pick<R2Object, 'uploaded'>): DateTime.Utc => DateTime.fromDateUnsafe(object.uploaded)
 

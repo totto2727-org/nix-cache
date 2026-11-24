@@ -10,6 +10,20 @@ describe('cache failure responses', () => {
     await runTest(workerBundle)
   }, 60_000)
 
+  test('denies valid credentials when workerd rejects a digest', async () => {
+    expect.hasAssertions()
+    return runTest(
+      Effect.gen(function* () {
+        const runtime = yield* cacheRuntime({ rejectDigest: true })
+        yield* seed(runtime)
+        const response = yield* request(runtime, narKey)
+        expect(response.status).toBe(503)
+        expect(response.headers.get('cache-control')).toBe('private, no-store')
+        expect(yield* text(response)).toBe('')
+      }),
+    )
+  })
+
   test.each(['GET', 'HEAD'])('returns a private generic 502 when R2 %s fails', async (method) => {
     expect.hasAssertions()
     return runTest(

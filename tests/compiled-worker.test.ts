@@ -4,6 +4,10 @@ import { describe, expect, test } from 'vite-plus/test'
 
 import { miniflare, runTest } from './support.ts'
 
+const username = '読者'
+const password = '秘密🔑'
+const authorization = `Basic ${Base64.encode(`${username}:${password}`)}`
+
 // oxlint-disable-next-line eslint/max-lines-per-function, eslint/max-statements -- Authentication, cold read, cache fill, and warm read must run against the same compiled workerd instance.
 const compiledWorkerScenario = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -27,8 +31,8 @@ const compiledWorkerScenario = Effect.gen(function* () {
           env: {
             ALCHEMY_STACK_NAME: { type: 'text', value: 'nix-cache' },
             ALCHEMY_STAGE: { type: 'text', value: 'test' },
-            NIX_CACHE_PASSWORD: { type: 'text', value: 'test-secret' },
-            NIX_CACHE_USERNAME: { type: 'text', value: 'reader' },
+            NIX_CACHE_PASSWORD: { type: 'text', value: password },
+            NIX_CACHE_USERNAME: { type: 'text', value: username },
             'nix-cache-objects': { name: 'built-smoke', type: 'r2' },
           },
           manifest: { mainModule: 'index.js', modules },
@@ -44,7 +48,7 @@ const compiledWorkerScenario = Effect.gen(function* () {
     runtime.dispatchFetch('https://cache.test/nix-cache-info', {
       headers: {
         'accept-encoding': 'identity',
-        authorization: `Basic ${Base64.encode('reader:test-secret')}`,
+        authorization,
       },
     }),
   )
@@ -56,7 +60,7 @@ const compiledWorkerScenario = Effect.gen(function* () {
     runtime.dispatchFetch('https://cache.test/nix-cache-info', {
       headers: {
         'accept-encoding': 'identity',
-        authorization: `Basic ${Base64.encode('reader:test-secret')}`,
+        authorization,
       },
     }),
   )
@@ -67,7 +71,7 @@ const compiledWorkerScenario = Effect.gen(function* () {
     runtime.dispatchFetch('https://cache.test/nix-cache-info', {
       headers: {
         'accept-encoding': 'identity',
-        authorization: `Basic ${Base64.encode('reader:test-secret')}`,
+        authorization,
       },
     }),
   )
@@ -93,7 +97,7 @@ const compiledWorkerScenario = Effect.gen(function* () {
 })
 
 describe('compiled worker', () => {
-  test('the compiled Alchemy Worker authenticates before reading its R2 binding', async () => {
+  test('the compiled Alchemy Worker authenticates UTF-8 reader credentials before reading R2', async () => {
     expect.hasAssertions()
     const content = 'StoreDir: /nix/store\n'
     const served = { body: content, length: `${content.length}`, policy: 'private, no-store', status: 200 }
