@@ -1,3 +1,4 @@
+import { BrowserCrypto } from '@effect/platform-browser'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import { WorkerExecutionContext } from 'alchemy/Cloudflare/Workers'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
@@ -49,6 +50,7 @@ export default Worker.make(
           username,
         }
         const services = Layer.mergeAll(
+          BrowserCrypto.layer,
           Layer.succeed(CacheBucket, reader),
           Layer.succeed(RuntimeContext, runtime),
           Layer.succeed(CacheStorage, responseCache),

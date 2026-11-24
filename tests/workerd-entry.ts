@@ -16,6 +16,8 @@ import { CacheReader } from '../src/cache-reader.ts'
 import { CacheRoutes } from '../src/cache.ts'
 // oxlint-disable-next-line import/no-relative-parent-imports -- The workerd acceptance entry injects native bindings into the application module.
 import { CacheStorage, defaultNativeCache, makeResponseCache } from '../src/cloudflare-storage.ts'
+// oxlint-disable-next-line import/max-dependencies -- This acceptance entry composes the routes, native storage bindings, and test Crypto layer.
+import { testCryptoLayer } from './crypto-fixture.ts'
 
 class InjectedFailure extends Data.TaggedError('InjectedFailure')<{ message: string }> {}
 
@@ -114,6 +116,7 @@ const workerd = {
     }
     // Alchemy's direct test client does not resolve a host RuntimeContext.
     const services = Layer.mergeAll(
+      testCryptoLayer(request.headers.has('x-test-crypto-digest-failure')),
       Layer.succeed(CacheBucket, reader),
       RuntimeContext.phantom,
       Layer.succeed(CacheStorage, injectedCache(request, context)),

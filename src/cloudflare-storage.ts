@@ -1,18 +1,25 @@
 import type * as CF from '@cloudflare/workers-types'
 import type { ObjectBody, R2Object } from 'alchemy/Cloudflare/R2'
-import { Cause, Context, DateTime, Effect, Option, Predicate, Schema } from 'effect'
+import { Cause, Context, Crypto, DateTime, Effect, Option, Predicate, Schema } from 'effect'
+import type { PlatformError } from 'effect'
 import { HttpServerResponse } from 'effect/http'
-
-const digest = (value: string): Effect.Effect<ArrayBuffer, Cause.UnknownError> =>
-  Effect.tryPromise(async () => crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
 
 // SHA-256 produces equal-length digests of the UTF-8 credentials.
 // Workerd supplies the native timingSafeEqual extension to SubtleCrypto.
-export const credentialsMatch = (supplied: string, expected: string): Effect.Effect<boolean, Cause.UnknownError> =>
+export const credentialsMatch = (
+  supplied: string,
+  expected: string,
+): Effect.Effect<boolean, PlatformError.PlatformError | Cause.UnknownError, Crypto.Crypto> =>
   Effect.gen(function* () {
-    const [suppliedDigest, expectedDigest] = yield* Effect.all([digest(supplied), digest(expected)], {
-      concurrency: 'unbounded',
-    })
+    const cryptography = yield* Crypto.Crypto
+    const encoder = new TextEncoder()
+    const [suppliedDigest, expectedDigest] = yield* Effect.all(
+      [
+        cryptography.digest('SHA-256', encoder.encode(supplied)),
+        cryptography.digest('SHA-256', encoder.encode(expected)),
+      ],
+      { concurrency: 'unbounded' },
+    )
     return yield* Effect.try(() => {
       const subtle: SubtleCrypto & Partial<Pick<CF.SubtleCrypto, 'timingSafeEqual'>> = crypto.subtle
       if (!Predicate.isFunction(subtle.timingSafeEqual)) {

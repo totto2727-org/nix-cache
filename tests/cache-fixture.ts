@@ -58,31 +58,7 @@ const compileWorker = Effect.gen(function* () {
 
 export const workerBundle = await runTest(Effect.cached(compileWorker))
 
-// The failure module affects only this test isolate. It wraps the same bundled routes.
-const withRejectedDigest = (manifest: Effect.Success<typeof workerBundle>): Effect.Success<typeof workerBundle> => {
-  const mainModule = 'reject-digest.mjs'
-  return {
-    mainModule,
-    modules: {
-      ...manifest.modules,
-      [mainModule]: {
-        contents: `
-          Object.defineProperty(crypto.subtle, 'digest', {
-            value: async () => { throw new DOMException('Injected digest failure'); },
-          });
-          export { default } from './${manifest.mainModule}';
-        `,
-        type: 'esm',
-      },
-    },
-  }
-}
-
-export const cacheRuntime = ({ rejectDigest = false }: { rejectDigest?: boolean } = {}): Effect.Effect<
-  Miniflare,
-  WorkerBundleError,
-  Scope.Scope | Path.Path
-> =>
+export const cacheRuntime = (): Effect.Effect<Miniflare, WorkerBundleError, Scope.Scope | Path.Path> =>
   Effect.flatMap(workerBundle, (manifest) =>
     miniflare({
       workers: [
@@ -102,7 +78,7 @@ export const cacheRuntime = ({ rejectDigest = false }: { rejectDigest?: boolean 
                 type: 'r2',
               },
             },
-            manifest: rejectDigest ? withRejectedDigest(manifest) : manifest,
+            manifest,
             name: 'nix-cache-test',
           },
         },

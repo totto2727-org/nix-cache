@@ -1,6 +1,7 @@
 import type { ObjectBody, R2Error, R2Object } from 'alchemy/Cloudflare/R2'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Array, Data, Effect, Option, Predicate, Record, Redacted, String } from 'effect'
+import type { Crypto } from 'effect'
 import { Base64 } from 'effect/encoding'
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http'
 
@@ -213,7 +214,7 @@ const authorize = (
   request: HttpServerRequest.HttpServerRequest,
   username: string,
   password: string,
-): Effect.Effect<Option.Option<HttpServerResponse.HttpServerResponse>> =>
+): Effect.Effect<Option.Option<HttpServerResponse.HttpServerResponse>, never, Crypto.Crypto> =>
   Effect.gen(function* () {
     if (String.isEmpty(username) || String.isEmpty(password) || String.includes(':')(username)) {
       return Option.some(reply(Status.unavailable))

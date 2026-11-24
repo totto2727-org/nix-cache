@@ -10,13 +10,13 @@ describe('cache failure responses', () => {
     await runTest(workerBundle)
   }, 60_000)
 
-  test('denies valid credentials when workerd rejects a digest', async () => {
+  test('denies valid credentials in workerd when the Crypto service fails', async () => {
     expect.hasAssertions()
     return runTest(
       Effect.gen(function* () {
-        const runtime = yield* cacheRuntime({ rejectDigest: true })
+        const runtime = yield* cacheRuntime()
         yield* seed(runtime)
-        const response = yield* request(runtime, narKey)
+        const response = yield* request(runtime, narKey, { headers: { 'x-test-crypto-digest-failure': '1' } })
         expect(response.status).toBe(503)
         expect(response.headers.get('cache-control')).toBe('private, no-store')
         expect(yield* text(response)).toBe('')
