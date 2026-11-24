@@ -1,42 +1,13 @@
-import { Array, Effect, FileSystem, Path, Record, String } from 'effect'
+import { Effect } from 'effect'
 import { Base64 } from 'effect/encoding'
 import { describe, expect, test } from 'vite-plus/test'
 
-import { miniflare, runTest } from './support.ts'
+import { cacheRuntime, getBucket } from './cache-fixture.ts'
+import { runTest } from './support.ts'
 
 // oxlint-disable-next-line eslint/max-lines-per-function, eslint/max-statements -- Authentication, cold read, cache fill, and warm read must run against the same compiled workerd instance.
 const compiledWorkerScenario = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const directory = path.resolve('dist/ssr')
-  const files = Array.filter(yield* fs.readDirectory(directory, { recursive: true }), String.endsWith('.js'))
-  const modules = Record.fromEntries(
-    yield* Effect.forEach(files, (name) =>
-      Effect.map(
-        fs.readFileString(path.join(directory, name)),
-        (contents) => [name, { contents, type: 'esm' as const }] as const,
-      ),
-    ),
-  )
-  const runtime = yield* miniflare({
-    workers: [
-      {
-        config: {
-          compatibilityDate: '2026-09-25',
-          compatibilityFlags: ['nodejs_compat'],
-          env: {
-            ALCHEMY_STACK_NAME: { type: 'text', value: 'nix-cache' },
-            ALCHEMY_STAGE: { type: 'text', value: 'test' },
-            NIX_CACHE_PASSWORD: { type: 'text', value: 'test-secret' },
-            NIX_CACHE_USERNAME: { type: 'text', value: 'reader' },
-            'nix-cache-objects': { name: 'built-smoke', type: 'r2' },
-          },
-          manifest: { mainModule: 'index.js', modules },
-          name: 'built-worker',
-        },
-      },
-    ],
-  })
+  const runtime = yield* cacheRuntime()
   // Dispatch and response objects belong to the real workerd test boundary.
   const unauthorized = yield* Effect.promise(async () => runtime.dispatchFetch('https://cache.test/nix-cache-info'))
   // Identity encoding makes byte-length checks independent of edge compression.
@@ -49,7 +20,7 @@ const compiledWorkerScenario = Effect.gen(function* () {
     }),
   )
 
-  const bucket = yield* Effect.promise(async () => runtime.getR2Bucket('nix-cache-objects'))
+  const bucket = yield* getBucket(runtime)
   const content = 'StoreDir: /nix/store\n'
   yield* Effect.promise(async () => bucket.put('nix-cache-info', content))
   const fetched = yield* Effect.promise(async () =>

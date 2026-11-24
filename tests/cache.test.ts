@@ -2,7 +2,17 @@ import { Array, Effect, Option, String } from 'effect'
 import { Base64 } from 'effect/encoding'
 import { beforeAll, describe, expect, test } from 'vite-plus/test'
 
-import { bodyBytes, bytes, cacheRuntime, narKey, request, seed, text, workerBundle } from './cache-fixture.ts'
+import {
+  bodyBytes,
+  bytes,
+  cacheRuntime,
+  getBucket,
+  narKey,
+  request,
+  seed,
+  text,
+  workerBundle,
+} from './cache-fixture.ts'
 import { runTest } from './support.ts'
 
 const challengesBasic = (header: string | null): boolean =>
@@ -19,7 +29,7 @@ describe('cache', () => {
     return runTest(
       Effect.gen(function* () {
         const runtime = yield* cacheRuntime()
-        const bucket = yield* Effect.promise(async () => runtime.getR2Bucket('BUCKET'))
+        const bucket = yield* getBucket(runtime)
         yield* Effect.promise(async () => bucket.put('nix-cache-info', 'StoreDir: /nix/store\n'))
         const first = yield* request(runtime, 'nix-cache-info')
         expect({ body: yield* text(first), status: first.status }).toStrictEqual({
@@ -97,7 +107,7 @@ describe('cache', () => {
     return runTest(
       Effect.gen(function* () {
         const runtime = yield* cacheRuntime()
-        const bucket = yield* Effect.promise(async () => runtime.getR2Bucket('BUCKET'))
+        const bucket = yield* getBucket(runtime)
         const aboveFormerCap = 128 * 1024 * 1024 + 1
         // Native bytes belong to the R2 and response body interoperability boundary.
         yield* Effect.promise(async () => bucket.put(narKey, new Uint8Array(aboveFormerCap)))
@@ -228,14 +238,13 @@ describe('cache', () => {
     expect.hasAssertions()
     return runTest(
       Effect.gen(function* () {
-        const runtime = yield* cacheRuntime()
-        const bucket = yield* Effect.promise(async () => runtime.getR2Bucket('BUCKET'))
+        const runtime = yield* cacheRuntime('replace-once')
+        const bucket = yield* getBucket(runtime)
         const original = yield* Effect.promise(async () => bucket.put(narKey, 'original-content'))
         const response = yield* request(runtime, narKey, {
           headers: {
             'if-range': original.httpEtag,
             range: 'bytes=0-3',
-            'x-test-replace-after-head': '1',
           },
         })
         expect(response.status).toBe(200)
@@ -256,7 +265,7 @@ describe('cache', () => {
     return runTest(
       Effect.gen(function* () {
         const runtime = yield* cacheRuntime()
-        const bucket = yield* Effect.promise(async () => runtime.getR2Bucket('BUCKET'))
+        const bucket = yield* getBucket(runtime)
         yield* Effect.promise(async () => bucket.put(key, 'opaque cache content'))
         const response = yield* request(runtime, key)
         expect(response.status).toBe(200)

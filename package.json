@@ -9,7 +9,6 @@
     "effect": "^4.0.6"
   },
   "devDependencies": {
-    "@alchemy.run/cloudflare-runtime": "^2.0.0-beta.81",
     "@cloudflare/workers-types": "^5.20261009.1",
     "@totto2727/gitignore-patterns": "^0.1.0",
     "@totto2727/oxlint": "^0.2.0",
