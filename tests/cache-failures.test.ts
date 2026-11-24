@@ -1,7 +1,18 @@
 import { Array, Effect } from 'effect'
 import { beforeAll, describe, expect, test } from 'vite-plus/test'
 
-import { bodyBytes, bytes, cacheRuntime, infoKey, narKey, request, seed, text, workerBundle } from './cache-fixture.ts'
+import {
+  bodyBytes,
+  bytes,
+  cacheRuntime,
+  getBucket,
+  infoKey,
+  narKey,
+  request,
+  seed,
+  text,
+  workerBundle,
+} from './cache-fixture.ts'
 import { runTest } from './support.ts'
 
 // oxlint-disable-next-line eslint/max-lines-per-function -- These scenarios share the workerd fault-injection fixture and runtime setup.
@@ -14,9 +25,9 @@ describe('cache failure responses', () => {
     expect.hasAssertions()
     return runTest(
       Effect.gen(function* () {
-        const runtime = yield* cacheRuntime()
+        const runtime = yield* cacheRuntime('crypto-digest')
         yield* seed(runtime)
-        const response = yield* request(runtime, narKey, { headers: { 'x-test-crypto-digest-failure': '1' } })
+        const response = yield* request(runtime, narKey)
         expect(response.status).toBe(503)
         expect(response.headers.get('cache-control')).toBe('private, no-store')
         expect(yield* text(response)).toBe('')
@@ -28,10 +39,9 @@ describe('cache failure responses', () => {
     expect.hasAssertions()
     return runTest(
       Effect.gen(function* () {
-        const runtime = yield* cacheRuntime()
+        const runtime = yield* cacheRuntime('r2-error')
         yield* seed(runtime)
         const response = yield* request(runtime, narKey, {
-          headers: { 'x-test-r2-failure': '1' },
           method,
         })
         expect(response.status).toBe(502)
@@ -41,15 +51,15 @@ describe('cache failure responses', () => {
     )
   })
 
-  test.each(['x-test-cache-match-failure', 'x-test-cache-put-failure'])(
+  test.each(['cache-match', 'cache-put'] as const)(
     'serves the original bytes when the Cache API fails: %s',
     async (fault) => {
       expect.hasAssertions()
       return runTest(
         Effect.gen(function* () {
-          const runtime = yield* cacheRuntime()
+          const runtime = yield* cacheRuntime(fault)
           yield* seed(runtime)
-          const response = yield* request(runtime, narKey, { headers: { [fault]: '1' } })
+          const response = yield* request(runtime, narKey)
           expect(response.status).toBe(200)
           expect(response.headers.get('cache-control')).toBe('private, no-store')
           expect(response.headers.get('content-length')).toBe('8')
@@ -63,10 +73,10 @@ describe('cache failure responses', () => {
     expect.hasAssertions()
     return runTest(
       Effect.gen(function* () {
-        const runtime = yield* cacheRuntime()
+        const runtime = yield* cacheRuntime('replace-always')
         yield* seed(runtime)
         const response = yield* request(runtime, narKey, {
-          headers: { range: 'bytes=0-3', 'x-test-replace-after-every-head': '1' },
+          headers: { range: 'bytes=0-3' },
         })
         expect(response.status).toBe(503)
         expect(response.headers.get('cache-control')).toBe('private, no-store')
@@ -81,7 +91,7 @@ describe('cache failure responses', () => {
       Effect.gen(function* () {
         const runtime = yield* cacheRuntime()
         expect((yield* request(runtime, infoKey)).status).toBe(404)
-        const bucket = yield* Effect.promise(async () => runtime.getR2Bucket('BUCKET'))
+        const bucket = yield* getBucket(runtime)
         yield* Effect.promise(async () => bucket.put(infoKey, 'StorePath: /nix/store/example\n'))
         const available = yield* request(runtime, infoKey)
         expect(available.status).toBe(200)

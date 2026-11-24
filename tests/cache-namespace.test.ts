@@ -1,7 +1,7 @@
 import { Effect, String } from 'effect'
 import { describe, expect, test } from 'vite-plus/test'
 
-import { cacheRuntime, infoKey, request } from './cache-fixture.ts'
+import { cacheRuntime, getBucket, infoKey, request } from './cache-fixture.ts'
 import { runTest } from './support.ts'
 
 describe('cache object namespace', () => {
@@ -12,7 +12,7 @@ describe('cache object namespace', () => {
       return runTest(
         Effect.gen(function* () {
           const runtime = yield* cacheRuntime()
-          const bucket = yield* Effect.promise(async () => runtime.getR2Bucket('BUCKET'))
+          const bucket = yield* getBucket(runtime)
           const [storedKey] = String.split(key, '?')
           yield* Effect.promise(async () => bucket.put(storedKey, 'outside the allowed namespace'))
           expect((yield* request(runtime, key)).status).toBe(404)

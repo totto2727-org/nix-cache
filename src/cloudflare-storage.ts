@@ -1,8 +1,12 @@
 import type * as CF from '@cloudflare/workers-types'
+import { BrowserCrypto } from '@effect/platform-browser'
 import type { ObjectBody, R2Object } from 'alchemy/Cloudflare/R2'
 import { Cause, Context, Crypto, DateTime, Effect, Option, Predicate, Schema } from 'effect'
-import type { PlatformError } from 'effect'
+import type { Layer, PlatformError } from 'effect'
 import { HttpServerResponse } from 'effect/http'
+
+// Workerd supplies the Web Crypto API used by Effect's platform layer.
+export const workerCryptoLayer: Layer.Layer<Crypto.Crypto> = BrowserCrypto.layer
 
 // SHA-256 produces equal-length digests of the UTF-8 credentials.
 // Workerd supplies the native timingSafeEqual extension to SubtleCrypto.

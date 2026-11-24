@@ -18,6 +18,3 @@ const failingCrypto = Layer.effect(
 )
 
 export const failedCryptoLayer: Layer.Layer<Crypto.Crypto> = failingCrypto.pipe(Layer.provide(BrowserCrypto.layer))
-
-export const testCryptoLayer = (failDigest: boolean): Layer.Layer<Crypto.Crypto> =>
-  failDigest ? failedCryptoLayer : BrowserCrypto.layer

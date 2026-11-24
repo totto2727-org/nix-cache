@@ -1,16 +1,19 @@
-// oxlint-disable-next-line rules/no-node-imports -- The compiler plugin must load in Node outside Vitest's runtime module transform.
-import { createRequire } from 'node:module'
+// oxlint-disable-next-line rules/no-node-imports -- Node erases types from the test-only Workerd fault adapter without invoking any bundler.
+import { stripTypeScriptTypes } from 'node:module'
 
-import type * as PurePlugin from 'alchemy/Bundle/PurePlugin'
-import { Array, Data, Effect, Option, Path, Record, String } from 'effect'
-import type { Scope } from 'effect'
+import type { PlatformError, Scope } from 'effect'
+import { Array, Effect, FileSystem, Path, Record, Schema, String } from 'effect'
 import { Base64 } from 'effect/encoding'
 import type { Miniflare } from 'miniflare'
-import { build } from 'vite'
 
+// oxlint-disable-next-line import/no-relative-parent-imports -- Workerd must run the manifest emitted by the production source provider.
+import { WorkerArtifact, workerArtifactDirectory } from '../src/worker-artifact.ts'
+// oxlint-disable-next-line import/no-relative-parent-imports -- Miniflare binds the same R2 resource name and compatibility settings as the deployed Worker.
+import { bucketId, workerProps } from '../src/worker-settings.ts'
 import { miniflare, runTest } from './support.ts'
 
-const authorization = `Basic ${Base64.encode('reader:test-secret')}`
+const defaultCredentials = { password: 'test-secret', username: 'reader' }
+const authorization = `Basic ${Base64.encode(`${defaultCredentials.username}:${defaultCredentials.password}`)}`
 const narHashWidth = 52
 const storePathHashWidth = 32
 // oxlint-disable-next-line eslint/no-magic-numbers -- The binary fixture deliberately includes zero, high-bit bytes, and 0xff.
@@ -19,72 +22,102 @@ export const narKey = `nar/${String.repeat(narHashWidth)('0')}.nar.zst`
 export const infoKey = `${String.repeat(storePathHashWidth)('0')}.narinfo`
 export const bytes = new Uint8Array(testBytes)
 
-class WorkerBundleError extends Data.TaggedError('WorkerBundleError')<{ message: string }> {}
+const decodeManifest = Schema.decodeEffect(WorkerArtifact)
+const faultHost = 'worker-faults.mjs'
 
-// oxlint-disable-next-line eslint/max-statements -- Compile the acceptance Worker and validate both the output and its entry chunk before handing it to workerd.
-const compileWorker = Effect.gen(function* () {
+const readArtifact = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Use Node's synchronous module loader for this fixed compiler plugin, outside Vitest's module transform.
-  const { purePlugin } = createRequire(import.meta.url)('alchemy/Bundle/PurePlugin') as typeof PurePlugin
-  const result = yield* Effect.promise(async () =>
-    build({
-      build: {
-        minify: false,
-        rolldownOptions: { preserveEntrySignatures: 'strict' },
-        ssr: path.resolve('tests/workerd-entry.ts'),
-        write: false,
-      },
-      configFile: false,
-      define: { 'globalThis.__ALCHEMY_RUNTIME__': 'true' },
-      logLevel: 'error',
-      plugins: [purePlugin()],
-      ssr: { noExternal: true },
-    }),
+  const directory = path.resolve(workerArtifactDirectory)
+  const metadata = yield* fs.readFileString(path.join(directory, 'manifest.json'))
+  const manifest = yield* decodeManifest(metadata)
+  const modulesRoot = path.join(directory, manifest.hash)
+  const files = Array.filter(manifest.modules, String.endsWith('.js'))
+  const modules = yield* Effect.forEach(files, (name) =>
+    fs
+      .readFileString(path.join(modulesRoot, name))
+      .pipe(Effect.map((contents) => [name, { contents, type: 'esm' as const }] as const)),
   )
-  const built = Array.isArray(result) ? result[0] : result
-  if (!built || !('output' in built)) {
-    return yield* new WorkerBundleError({ message: 'Expected a completed Worker build' })
-  }
-  const chunks = Array.filter(built.output, (entry) => entry.type === 'chunk')
-  const entry = Array.findFirst(chunks, (chunk) => chunk.isEntry)
-  if (Option.isNone(entry)) {
-    return yield* new WorkerBundleError({ message: 'Missing acceptance Worker bundle' })
-  }
-  const modules = Record.fromEntries(
-    Array.map(chunks, (chunk) => [chunk.fileName, { contents: chunk.code, type: 'esm' as const }] as const),
-  )
-  return { mainModule: entry.value.fileName, modules }
+  return { mainModule: manifest.entry, modules: Record.fromEntries(modules) }
 })
 
-export const workerBundle = await runTest(Effect.cached(compileWorker))
+export const workerBundle = await runTest(Effect.cached(readArtifact))
 
-export const cacheRuntime = (): Effect.Effect<Miniflare, WorkerBundleError, Scope.Scope | Path.Path> =>
-  Effect.flatMap(workerBundle, (manifest) =>
-    miniflare({
+export type Fault = 'r2-error' | 'cache-match' | 'cache-put' | 'replace-once' | 'replace-always' | 'crypto-digest'
+
+const localBindings = {
+  ALCHEMY_CLOUDFLARE_ACCOUNT_ID: { type: 'text' as const, value: 'local-test-account' },
+  [bucketId]: {
+    dev: {
+      experimentalS3Credentials: {
+        accessKeyId: 'local-test-access-key',
+        secretAccessKey: 'local-test-secret-key',
+      },
+    },
+    name: 'test-cache',
+    type: 'r2' as const,
+  },
+}
+
+const faultConfiguration = (
+  entry: string,
+  fault: Fault,
+): Effect.Effect<
+  { bindings: Record<string, { type: 'text'; value: string }>; module: { contents: string; type: 'esm' } },
+  PlatformError.PlatformError,
+  FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const source = yield* fs.readFileString('tests/worker-faults.ts')
+    const contents = stripTypeScriptTypes(source)
+    return {
+      bindings: {
+        TEST_BUCKET_BINDING: { type: 'text', value: bucketId },
+        TEST_FAULT: { type: 'text', value: fault },
+        TEST_WORKER_MODULE: { type: 'text', value: `./${entry}` },
+      },
+      module: { contents, type: 'esm' },
+    }
+  })
+
+export const cacheRuntime = (
+  fault?: Fault,
+  credentials = defaultCredentials,
+): Effect.Effect<
+  Miniflare,
+  PlatformError.PlatformError | Schema.SchemaError,
+  FileSystem.FileSystem | Path.Path | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const artifact = yield* workerBundle
+    const fixture = fault ? yield* faultConfiguration(artifact.mainModule, fault) : undefined
+    const manifest = fixture
+      ? { mainModule: faultHost, modules: { ...artifact.modules, [faultHost]: fixture.module } }
+      : artifact
+    const { date, flags } = workerProps.compatibility
+    return yield* miniflare({
       workers: [
         {
           config: {
-            compatibilityDate: '2026-09-25',
-            compatibilityFlags: ['nodejs_compat'],
+            compatibilityDate: date,
+            compatibilityFlags: flags,
             env: {
-              BUCKET: {
-                dev: {
-                  experimentalS3Credentials: {
-                    accessKeyId: 'local-test-access-key',
-                    secretAccessKey: 'local-test-secret-key',
-                  },
-                },
-                name: 'test-cache',
-                type: 'r2',
-              },
+              ...localBindings,
+              ...fixture?.bindings,
+              NIX_CACHE_PASSWORD: { type: 'text', value: credentials.password },
+              NIX_CACHE_USERNAME: { type: 'text', value: credentials.username },
             },
             manifest,
             name: 'nix-cache-test',
           },
         },
       ],
-    }),
-  )
+    })
+  })
+
+export const getBucket = (runtime: Miniflare): Effect.Effect<Awaited<ReturnType<Miniflare['getR2Bucket']>>> =>
+  Effect.promise(async () => runtime.getR2Bucket(bucketId))
 
 type NativeResponse = Awaited<ReturnType<Miniflare['dispatchFetch']>>
 export const request = (
@@ -111,7 +144,7 @@ export const bodyBytes = (response: NativeResponse): Effect.Effect<number[]> =>
   )
 export const seed = (runtime: Miniflare): Effect.Effect<Awaited<ReturnType<Miniflare['getR2Bucket']>>> =>
   Effect.gen(function* () {
-    const bucket = yield* Effect.promise(async () => runtime.getR2Bucket('BUCKET'))
+    const bucket = yield* getBucket(runtime)
     yield* Effect.promise(async () => bucket.put(narKey, bytes))
     return bucket
   })

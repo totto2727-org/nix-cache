@@ -1,4 +1,3 @@
-import { BrowserCrypto } from '@effect/platform-browser'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import { WorkerExecutionContext } from 'alchemy/Cloudflare/Workers'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
@@ -8,19 +7,16 @@ import { HttpRouter } from 'effect/http'
 import { CacheBucket } from './cache-bucket.ts'
 import { CacheReader } from './cache-reader.ts'
 import { CacheRoutes } from './cache.ts'
-import { CacheStorage, defaultNativeCache, makeResponseCache } from './cloudflare-storage.ts'
+import { CacheStorage, defaultNativeCache, makeResponseCache, workerCryptoLayer } from './cloudflare-storage.ts'
+import { bucketId, workerId, workerProps } from './worker-settings.ts'
 
-export class Worker extends Cloudflare.Worker<Worker, Cloudflare.WorkerShape>()('nix-cache-reader') {}
+export class Worker extends Cloudflare.Worker<Worker, Cloudflare.WorkerShape>()(workerId) {}
 
 // oxlint-disable-next-line import/no-default-export -- The Alchemy bundler loads the Worker resource from the entry module default.
 export default Worker.make(
-  {
-    compatibility: { date: '2026-09-25', flags: ['nodejs_compat'] },
-    main: import.meta.url,
-    vite: {},
-  },
+  workerProps,
   Effect.gen(function* () {
-    const bucket = yield* Cloudflare.R2.Bucket('nix-cache-objects', {
+    const bucket = yield* Cloudflare.R2.Bucket(bucketId, {
       domains: [],
       forceDestroy: false,
       publicAccess: false,
@@ -50,7 +46,7 @@ export default Worker.make(
           username,
         }
         const services = Layer.mergeAll(
-          BrowserCrypto.layer,
+          workerCryptoLayer,
           Layer.succeed(CacheBucket, reader),
           Layer.succeed(RuntimeContext, runtime),
           Layer.succeed(CacheStorage, responseCache),
