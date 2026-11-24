@@ -1,88 +1,108 @@
 import { Array, Effect, FileSystem, Path, Record, String } from 'effect'
 import { Base64 } from 'effect/encoding'
-import { expect, it } from 'vite-plus/test'
+import { describe, expect, test } from 'vite-plus/test'
 
-import { miniflare, runTest } from './support'
+import { miniflare, runTest } from './support.ts'
 
-it('the compiled Alchemy Worker authenticates before reading its R2 binding', () =>
-  runTest(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const directory = path.resolve('dist/ssr')
-      const files = Array.filter(yield* fs.readDirectory(directory, { recursive: true }), String.endsWith('.js'))
-      const modules = Record.fromEntries(
-        yield* Effect.forEach(files, (name) =>
-          Effect.map(
-            fs.readFileString(path.join(directory, name)),
-            (contents) => [name, { type: 'esm' as const, contents }] as const,
-          ),
-        ),
-      )
-      const runtime = yield* miniflare({
-        workers: [
-          {
-            config: {
-              name: 'built-worker',
-              compatibilityDate: '2026-09-25',
-              compatibilityFlags: ['nodejs_compat'],
-              manifest: { mainModule: 'index.js', modules },
-              env: {
-                ALCHEMY_STACK_NAME: { type: 'text', value: 'nix-cache' },
-                ALCHEMY_STAGE: { type: 'text', value: 'test' },
-                NIX_CACHE_USERNAME: { type: 'text', value: 'reader' },
-                NIX_CACHE_PASSWORD: { type: 'text', value: 'test-secret' },
-                'nix-cache-objects': { type: 'r2', name: 'built-smoke' },
-              },
-            },
+// oxlint-disable-next-line eslint/max-lines-per-function, eslint/max-statements -- Authentication, cold read, cache fill, and warm read must run against the same compiled workerd instance.
+const compiledWorkerScenario = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const directory = path.resolve('dist/ssr')
+  const files = Array.filter(yield* fs.readDirectory(directory, { recursive: true }), String.endsWith('.js'))
+  const modules = Record.fromEntries(
+    yield* Effect.forEach(files, (name) =>
+      Effect.map(
+        fs.readFileString(path.join(directory, name)),
+        (contents) => [name, { contents, type: 'esm' as const }] as const,
+      ),
+    ),
+  )
+  const runtime = yield* miniflare({
+    workers: [
+      {
+        config: {
+          compatibilityDate: '2026-09-25',
+          compatibilityFlags: ['nodejs_compat'],
+          env: {
+            ALCHEMY_STACK_NAME: { type: 'text', value: 'nix-cache' },
+            ALCHEMY_STAGE: { type: 'text', value: 'test' },
+            NIX_CACHE_PASSWORD: { type: 'text', value: 'test-secret' },
+            NIX_CACHE_USERNAME: { type: 'text', value: 'reader' },
+            'nix-cache-objects': { name: 'built-smoke', type: 'r2' },
           },
-        ],
-      })
-      // Dispatch and response objects belong to the real workerd test boundary.
-      const unauthorized = yield* Effect.promise(() => runtime.dispatchFetch('https://cache.test/nix-cache-info'))
-      expect(unauthorized.status).toBe(401)
-      // Identity encoding makes byte-length checks independent of edge compression.
-      const authorized = yield* Effect.promise(() =>
-        runtime.dispatchFetch('https://cache.test/nix-cache-info', {
-          headers: {
-            authorization: `Basic ${Base64.encode('reader:test-secret')}`,
-            'accept-encoding': 'identity',
-          },
-        }),
-      )
-      expect(authorized.status).toBe(404)
-      expect(authorized.headers.get('cache-control')).toBe('private, no-store')
-
-      const bucket = yield* Effect.promise(() => runtime.getR2Bucket('nix-cache-objects'))
-      const content = 'StoreDir: /nix/store\n'
-      yield* Effect.promise(() => bucket.put('nix-cache-info', content))
-      const fetched = yield* Effect.promise(() =>
-        runtime.dispatchFetch('https://cache.test/nix-cache-info', {
-          headers: {
-            authorization: `Basic ${Base64.encode('reader:test-secret')}`,
-            'accept-encoding': 'identity',
-          },
-        }),
-      )
-      expect(fetched.status).toBe(200)
-      expect(fetched.headers.get('content-length')).toBe(`${content.length}`)
-      expect(fetched.headers.get('cache-control')).toBe('private, no-store')
-      expect(yield* Effect.promise(() => fetched.text())).toBe(content)
-
-      yield* Effect.promise(() => bucket.delete('nix-cache-info'))
-      const warm = yield* Effect.promise(() =>
-        runtime.dispatchFetch('https://cache.test/nix-cache-info', {
-          headers: {
-            authorization: `Basic ${Base64.encode('reader:test-secret')}`,
-            'accept-encoding': 'identity',
-          },
-        }),
-      )
-      expect(warm.status).toBe(200)
-      expect(warm.headers.get('content-length')).toBe(`${content.length}`)
-      expect(warm.headers.get('cache-control')).toBe('private, no-store')
-      expect(yield* Effect.promise(() => warm.text())).toBe(content)
-      const warmUnauthorized = yield* Effect.promise(() => runtime.dispatchFetch('https://cache.test/nix-cache-info'))
-      expect(warmUnauthorized.status).toBe(401)
+          manifest: { mainModule: 'index.js', modules },
+          name: 'built-worker',
+        },
+      },
+    ],
+  })
+  // Dispatch and response objects belong to the real workerd test boundary.
+  const unauthorized = yield* Effect.promise(async () => runtime.dispatchFetch('https://cache.test/nix-cache-info'))
+  // Identity encoding makes byte-length checks independent of edge compression.
+  const authorized = yield* Effect.promise(async () =>
+    runtime.dispatchFetch('https://cache.test/nix-cache-info', {
+      headers: {
+        'accept-encoding': 'identity',
+        authorization: `Basic ${Base64.encode('reader:test-secret')}`,
+      },
     }),
-  ))
+  )
+
+  const bucket = yield* Effect.promise(async () => runtime.getR2Bucket('nix-cache-objects'))
+  const content = 'StoreDir: /nix/store\n'
+  yield* Effect.promise(async () => bucket.put('nix-cache-info', content))
+  const fetched = yield* Effect.promise(async () =>
+    runtime.dispatchFetch('https://cache.test/nix-cache-info', {
+      headers: {
+        'accept-encoding': 'identity',
+        authorization: `Basic ${Base64.encode('reader:test-secret')}`,
+      },
+    }),
+  )
+  const fetchedBody = yield* Effect.promise(async () => fetched.text())
+
+  yield* Effect.promise(async () => bucket.delete('nix-cache-info'))
+  const warm = yield* Effect.promise(async () =>
+    runtime.dispatchFetch('https://cache.test/nix-cache-info', {
+      headers: {
+        'accept-encoding': 'identity',
+        authorization: `Basic ${Base64.encode('reader:test-secret')}`,
+      },
+    }),
+  )
+  const warmBody = yield* Effect.promise(async () => warm.text())
+  const warmUnauthorized = yield* Effect.promise(async () => runtime.dispatchFetch('https://cache.test/nix-cache-info'))
+  return {
+    cached: {
+      body: warmBody,
+      length: warm.headers.get('content-length'),
+      policy: warm.headers.get('cache-control'),
+      status: warm.status,
+    },
+    fresh: {
+      body: fetchedBody,
+      length: fetched.headers.get('content-length'),
+      policy: fetched.headers.get('cache-control'),
+      status: fetched.status,
+    },
+    missing: { policy: authorized.headers.get('cache-control'), status: authorized.status },
+    unauthorized: unauthorized.status,
+    warmUnauthorized: warmUnauthorized.status,
+  }
+})
+
+describe('compiled worker', () => {
+  test('the compiled Alchemy Worker authenticates before reading its R2 binding', async () => {
+    expect.hasAssertions()
+    const content = 'StoreDir: /nix/store\n'
+    const served = { body: content, length: `${content.length}`, policy: 'private, no-store', status: 200 }
+    await expect(runTest(compiledWorkerScenario)).resolves.toStrictEqual({
+      cached: served,
+      fresh: served,
+      missing: { policy: 'private, no-store', status: 404 },
+      unauthorized: 401,
+      warmUnauthorized: 401,
+    })
+  })
+})
