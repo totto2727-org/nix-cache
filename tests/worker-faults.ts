@@ -69,6 +69,24 @@ const injectCache = (fault: Fault): (() => void) => {
   }
 }
 
+// BrowserCrypto translates this native rejection into an Effect PlatformError.
+const injectDigestFailure = (): (() => void) => {
+  // oxlint-disable-next-line rules/no-raw-crypto -- Workerd loads this unbundled fault fixture without npm imports. Patch the native digest that the deployed Effect layer uses.
+  const { subtle } = crypto
+  const original = Object.getOwnPropertyDescriptor(subtle, 'digest')
+  Object.defineProperty(subtle, 'digest', {
+    configurable: true,
+    value: async (): Promise<never> => reject('Injected Web Crypto digest failure'),
+  })
+  return () => {
+    if (original) {
+      Object.defineProperty(subtle, 'digest', original)
+    } else {
+      Reflect.deleteProperty(subtle, 'digest')
+    }
+  }
+}
+
 const dispatch = async (request: Request, env: Bindings, context: unknown): Promise<Response> => {
   const { TEST_BUCKET_BINDING: name, TEST_FAULT: fault, TEST_WORKER_MODULE: module } = env
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The manifest names the official Alchemy Worker bridge class.
@@ -84,16 +102,20 @@ const dispatch = async (request: Request, env: Bindings, context: unknown): Prom
   return response
 }
 
+const injectFault = (fault: Fault): (() => void) | undefined => {
+  if (fault === 'crypto-digest') {
+    return injectDigestFailure()
+  }
+  return fault === 'cache-match' || fault === 'cache-put' ? injectCache(fault) : undefined
+}
+
 const host = {
   async fetch(request: Request, env: Bindings, context: unknown): Promise<Response> {
-    if (env.TEST_FAULT !== 'cache-match' && env.TEST_FAULT !== 'cache-put') {
-      return dispatch(request, env, context)
-    }
-    const restore = injectCache(env.TEST_FAULT)
+    const restore = injectFault(env.TEST_FAULT)
     try {
       return await dispatch(request, env, context)
     } finally {
-      restore()
+      restore?.()
     }
   },
 }

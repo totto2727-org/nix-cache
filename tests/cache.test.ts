@@ -59,7 +59,7 @@ describe('cache', () => {
     )
   })
 
-  test.each(['', 'Basic bad', `Basic ${Base64.encode('reader:incorrect')}`])(
+  test.each(['', 'Basic bad', `Basic ${Base64.encode('reader:test-secreu')}`])(
     'rejects invalid reader credentials: %s',
     async (invalid) => {
       expect.hasAssertions()

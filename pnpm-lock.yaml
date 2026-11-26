@@ -176,6 +176,9 @@ importers:
 
   .:
     dependencies:
+      '@effect/platform-browser':
+        specifier: 4.0.6
+        version: 4.0.6(effect@4.0.6)
       '@effect/platform-node':
         specifier: ^4.0.6
         version: 4.0.6(effect@4.0.6)(redis@6.3.0)
@@ -446,6 +449,11 @@ packages:
     resolution: {integrity: sha512-dnxhg39lZjpTdZbHCVYPoUC9E2r8eSHbqiYDhSq2EurVPJcc9YRXlxZR1bP1nniSp078XV8GA+aUECt/Z56aQg==}
     peerDependencies:
       effect: ^4.0.0
+
+  '@effect/platform-browser@4.0.6':
+    resolution: {integrity: sha512-i4bf1+FlUnZypqK0pQ5cq46KhroTgqFGktFn2WorwIk+yc+RuZO6qsF+Sk6lY5uHwdHTOLGMlnlXSJ8u1UG42g==}
+    peerDependencies:
+      effect: ^4.0.6
 
   '@effect/platform-node-shared@4.0.6':
     resolution: {integrity: sha512-0PhyC4uG30xGtsajnxjkcBWfTjNRzUh4ZKl1Kvo/MNyCTb+W2O+fBzf7wCRCoqt+nLudiq4V7vX40Q8XIBuMaQ==}
@@ -2679,6 +2687,10 @@ snapshots:
   '@distilled.cloud/zerossl@1.0.0-rc.13(effect@4.0.6)':
     dependencies:
       '@distilled.cloud/core': 1.0.0-rc.13(effect@4.0.6)
+      effect: 4.0.6
+
+  '@effect/platform-browser@4.0.6(effect@4.0.6)':
+    dependencies:
       effect: 4.0.6
 
   '@effect/platform-node-shared@4.0.6(effect@4.0.6)':

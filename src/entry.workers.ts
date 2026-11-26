@@ -7,7 +7,7 @@ import { HttpRouter } from 'effect/http'
 import { CacheBucket } from './cache-bucket.ts'
 import { CacheReader } from './cache-reader.ts'
 import { CacheRoutes } from './cache.ts'
-import { CacheStorage, defaultNativeCache, makeResponseCache } from './cloudflare-storage.ts'
+import { CacheStorage, defaultNativeCache, makeResponseCache, workerCryptoLayer } from './cloudflare-storage.ts'
 import { bucketId, workerId, workerProps } from './worker-settings.ts'
 
 export class Worker extends Cloudflare.Worker<Worker, Cloudflare.WorkerShape>()(workerId) {}
@@ -46,6 +46,7 @@ export default Worker.make(
           username,
         }
         const services = Layer.mergeAll(
+          workerCryptoLayer,
           Layer.succeed(CacheBucket, reader),
           Layer.succeed(RuntimeContext, runtime),
           Layer.succeed(CacheStorage, responseCache),

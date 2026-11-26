@@ -12,7 +12,8 @@ import { WorkerArtifact, workerArtifactDirectory } from '../src/worker-artifact.
 import { bucketId, workerProps } from '../src/worker-settings.ts'
 import { miniflare, runTest } from './support.ts'
 
-const authorization = `Basic ${Base64.encode('reader:test-secret')}`
+const defaultCredentials = { password: 'test-secret', username: 'reader' }
+const authorization = `Basic ${Base64.encode(`${defaultCredentials.username}:${defaultCredentials.password}`)}`
 const narHashWidth = 52
 const storePathHashWidth = 32
 // oxlint-disable-next-line eslint/no-magic-numbers -- The binary fixture deliberately includes zero, high-bit bytes, and 0xff.
@@ -42,12 +43,10 @@ const readArtifact = Effect.gen(function* () {
 
 export const workerBundle = await runTest(Effect.cached(readArtifact))
 
-export type Fault = 'r2-error' | 'cache-match' | 'cache-put' | 'replace-once' | 'replace-always'
+export type Fault = 'r2-error' | 'cache-match' | 'cache-put' | 'replace-once' | 'replace-always' | 'crypto-digest'
 
 const localBindings = {
   ALCHEMY_CLOUDFLARE_ACCOUNT_ID: { type: 'text' as const, value: 'local-test-account' },
-  NIX_CACHE_PASSWORD: { type: 'text' as const, value: 'test-secret' },
-  NIX_CACHE_USERNAME: { type: 'text' as const, value: 'reader' },
   [bucketId]: {
     dev: {
       experimentalS3Credentials: {
@@ -84,6 +83,7 @@ const faultConfiguration = (
 
 export const cacheRuntime = (
   fault?: Fault,
+  credentials = defaultCredentials,
 ): Effect.Effect<
   Miniflare,
   PlatformError.PlatformError | Schema.SchemaError,
@@ -102,7 +102,12 @@ export const cacheRuntime = (
           config: {
             compatibilityDate: date,
             compatibilityFlags: flags,
-            env: { ...localBindings, ...fixture?.bindings },
+            env: {
+              ...localBindings,
+              ...fixture?.bindings,
+              NIX_CACHE_PASSWORD: { type: 'text', value: credentials.password },
+              NIX_CACHE_USERNAME: { type: 'text', value: credentials.username },
+            },
             manifest,
             name: 'nix-cache-test',
           },

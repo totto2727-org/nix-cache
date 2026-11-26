@@ -1,6 +1,7 @@
 import type { ObjectBody, R2Error, R2Object } from 'alchemy/Cloudflare/R2'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Array, Data, Effect, Option, Predicate, Record, Redacted, String } from 'effect'
+import type { Crypto } from 'effect'
 import { Base64 } from 'effect/encoding'
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http'
 
@@ -213,19 +214,23 @@ const authorize = (
   request: HttpServerRequest.HttpServerRequest,
   username: string,
   password: string,
-): Option.Option<HttpServerResponse.HttpServerResponse> => {
-  if (String.isEmpty(username) || String.isEmpty(password) || String.includes(':')(username)) {
-    return Option.some(reply(Status.unavailable))
-  }
-  const expected = `Basic ${Base64.encode(`${username}:${password}`)}`
-  if (!credentialsMatch(request.headers['authorization'] ?? '', expected)) {
-    return Option.some(reply(Status.unauthorized, { 'WWW-Authenticate': 'Basic realm="nix-cache", charset="UTF-8"' }))
-  }
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
-    return Option.some(reply(Status.methodNotAllowed, { Allow: 'GET, HEAD' }))
-  }
-  return Option.none()
-}
+): Effect.Effect<Option.Option<HttpServerResponse.HttpServerResponse>, never, Crypto.Crypto> =>
+  Effect.gen(function* () {
+    if (String.isEmpty(username) || String.isEmpty(password) || String.includes(':')(username)) {
+      return Option.some(reply(Status.unavailable))
+    }
+    const expected = `Basic ${Base64.encode(`${username}:${password}`)}`
+    const matched = yield* Effect.option(credentialsMatch(request.headers['authorization'] ?? '', expected))
+    if (Option.isNone(matched)) {
+      return Option.some(reply(Status.unavailable))
+    }
+    if (!matched.value) {
+      return Option.some(reply(Status.unauthorized, { 'WWW-Authenticate': 'Basic realm="nix-cache", charset="UTF-8"' }))
+    }
+    return request.method === 'GET' || request.method === 'HEAD'
+      ? Option.none()
+      : Option.some(reply(Status.methodNotAllowed, { Allow: 'GET, HEAD' }))
+  })
 
 const resolveObject = (
   request: HttpServerRequest.HttpServerRequest,
@@ -262,7 +267,7 @@ const readCachedObject = (
 const cacheObject = Effect.gen(function* () {
   const reader = yield* CacheReader
   const request = yield* HttpServerRequest.HttpServerRequest
-  const denied = authorize(request, Redacted.value(reader.username), Redacted.value(reader.password))
+  const denied = yield* authorize(request, Redacted.value(reader.username), Redacted.value(reader.password))
   if (Option.isSome(denied)) {
     return denied.value
   }

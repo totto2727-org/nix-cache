@@ -1,21 +1,39 @@
-// oxlint-disable-next-line rules/no-node-imports -- Node crypto supplies the constant-time comparator for fixed-size credential digests.
-import { createHash, timingSafeEqual } from 'node:crypto'
-
 import type * as CF from '@cloudflare/workers-types'
+import { BrowserCrypto } from '@effect/platform-browser'
 import type { ObjectBody, R2Object } from 'alchemy/Cloudflare/R2'
-import { Context, DateTime, Effect, Option, Predicate, Schema } from 'effect'
+import { Cause, Context, Crypto, DateTime, Effect, Option, Predicate, Schema } from 'effect'
+import type { Layer, PlatformError } from 'effect'
 import { HttpServerResponse } from 'effect/http'
 
-// Fixed-size SHA-256 digests preserve timing-safe comparison for arbitrary
-// Credential lengths. Native crypto is required for timingSafeEqual.
-const digest = (value: string): Uint8Array => {
-  const hash = createHash('sha256')
-  hash.update(value)
-  return hash.digest()
-}
+// Workerd supplies the Web Crypto API used by Effect's platform layer.
+export const workerCryptoLayer: Layer.Layer<Crypto.Crypto> = BrowserCrypto.layer
 
-export const credentialsMatch = (supplied: string, expected: string): boolean =>
-  timingSafeEqual(digest(supplied), digest(expected))
+// SHA-256 produces equal-length digests of the UTF-8 credentials.
+// Effect Crypto has no constant-time comparison API. Workerd supplies a native extension.
+// Use the same WebCrypto reference for digests and comparison.
+export const credentialsMatch = (
+  supplied: string,
+  expected: string,
+): Effect.Effect<boolean, PlatformError.PlatformError | Cause.UnknownError, Crypto.Crypto> =>
+  Effect.gen(function* () {
+    const cryptography = yield* Crypto.Crypto
+    const encoder = new TextEncoder()
+    const [suppliedDigest, expectedDigest] = yield* Effect.all(
+      [
+        cryptography.digest('SHA-256', encoder.encode(supplied)),
+        cryptography.digest('SHA-256', encoder.encode(expected)),
+      ],
+      { concurrency: 'unbounded' },
+    )
+    const webCrypto = yield* BrowserCrypto.WebCrypto
+    return yield* Effect.try(() => {
+      const subtle: SubtleCrypto & Partial<Pick<CF.SubtleCrypto, 'timingSafeEqual'>> = webCrypto.subtle
+      if (!Predicate.isFunction(subtle.timingSafeEqual)) {
+        throw new Cause.UnknownError(undefined, 'Workerd timingSafeEqual is unavailable')
+      }
+      return subtle.timingSafeEqual(suppliedDigest, expectedDigest)
+    })
+  })
 
 export const uploaded = (object: Pick<R2Object, 'uploaded'>): DateTime.Utc => DateTime.fromDateUnsafe(object.uploaded)
 
