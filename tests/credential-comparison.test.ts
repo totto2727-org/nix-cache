@@ -1,5 +1,6 @@
+import { BrowserCrypto } from '@effect/platform-browser'
 import { Cause, Effect, PlatformError } from 'effect'
-import { afterEach, describe, expect, test, vi } from 'vite-plus/test'
+import { describe, expect, test, vi } from 'vite-plus/test'
 
 // oxlint-disable-next-line import/no-relative-parent-imports -- Exercise the same credential adapter used by the Worker.
 import { credentialsMatch } from '../src/cloudflare-storage.ts'
@@ -8,11 +9,15 @@ import { runTest } from './support.ts'
 
 const digest = crypto.subtle.digest.bind(crypto.subtle)
 
-describe('credential comparison', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
+const withNativeComparator = (timingSafeEqual?: (left: Uint8Array, right: Uint8Array) => boolean): Crypto => ({
+  getRandomValues: (value) => crypto.getRandomValues(value),
+  randomUUID: () => crypto.randomUUID(),
+  subtle: new Proxy(crypto.subtle, {
+    get: (subtle, key): unknown => (key === 'timingSafeEqual' ? timingSafeEqual : Reflect.get(subtle, key, subtle)),
+  }),
+})
 
+describe('credential comparison', () => {
   test.each([
     { expected: 'secret', matches: true, supplied: 'secret' },
     { expected: 'secret', matches: false, supplied: 'secreu' },
@@ -22,10 +27,12 @@ describe('credential comparison', () => {
     'passes the UTF-8 digests to the native comparison boundary: $supplied',
     async ({ expected, matches, supplied }) => {
       expect.hasAssertions()
-      // The NodeServices layer supplies Effect Crypto. Mock only the Workers extension.
+      // NodeServices supplies the digest. Provide the Workers comparator through BrowserCrypto.
       const timingSafeEqual = vi.fn<(left: Uint8Array, right: Uint8Array) => boolean>().mockReturnValue(matches)
-      vi.stubGlobal('crypto', { subtle: { timingSafeEqual } })
-      await expect(runTest(credentialsMatch(supplied, expected))).resolves.toBe(matches)
+      const program = credentialsMatch(supplied, expected).pipe(
+        Effect.provideService(BrowserCrypto.WebCrypto, withNativeComparator(timingSafeEqual)),
+      )
+      await expect(runTest(program)).resolves.toBe(matches)
       const encoder = new TextEncoder()
       const suppliedDigest = await digest('SHA-256', encoder.encode(supplied))
       const expectedDigest = await digest('SHA-256', encoder.encode(expected))
@@ -39,15 +46,19 @@ describe('credential comparison', () => {
   test('fails when the Crypto service digest fails and skips comparison', async () => {
     expect.hasAssertions()
     const timingSafeEqual = vi.fn<() => boolean>()
-    vi.stubGlobal('crypto', { subtle: { timingSafeEqual } })
-    const program = credentialsMatch('secret', 'secret').pipe(Effect.provide(failedCryptoLayer))
+    const program = credentialsMatch('secret', 'secret').pipe(
+      Effect.provide(failedCryptoLayer),
+      Effect.provideService(BrowserCrypto.WebCrypto, withNativeComparator(timingSafeEqual)),
+    )
     await expect(runTest(program)).rejects.toBeInstanceOf(PlatformError.PlatformError)
     expect(timingSafeEqual).not.toHaveBeenCalled()
   })
 
   test('fails when the native comparison extension is unavailable', async () => {
     expect.hasAssertions()
-    vi.stubGlobal('crypto', { subtle: {} })
-    await expect(runTest(credentialsMatch('secret', 'secret'))).rejects.toBeInstanceOf(Cause.UnknownError)
+    const program = credentialsMatch('secret', 'secret').pipe(
+      Effect.provideService(BrowserCrypto.WebCrypto, withNativeComparator()),
+    )
+    await expect(runTest(program)).rejects.toBeInstanceOf(Cause.UnknownError)
   })
 })

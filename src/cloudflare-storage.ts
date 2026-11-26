@@ -9,7 +9,8 @@ import { HttpServerResponse } from 'effect/http'
 export const workerCryptoLayer: Layer.Layer<Crypto.Crypto> = BrowserCrypto.layer
 
 // SHA-256 produces equal-length digests of the UTF-8 credentials.
-// Workerd supplies the native timingSafeEqual extension to SubtleCrypto.
+// Effect Crypto has no constant-time comparison API. Workerd supplies a native extension.
+// Use the same WebCrypto reference for digests and comparison.
 export const credentialsMatch = (
   supplied: string,
   expected: string,
@@ -24,8 +25,9 @@ export const credentialsMatch = (
       ],
       { concurrency: 'unbounded' },
     )
+    const webCrypto = yield* BrowserCrypto.WebCrypto
     return yield* Effect.try(() => {
-      const subtle: SubtleCrypto & Partial<Pick<CF.SubtleCrypto, 'timingSafeEqual'>> = crypto.subtle
+      const subtle: SubtleCrypto & Partial<Pick<CF.SubtleCrypto, 'timingSafeEqual'>> = webCrypto.subtle
       if (!Predicate.isFunction(subtle.timingSafeEqual)) {
         throw new Cause.UnknownError(undefined, 'Workerd timingSafeEqual is unavailable')
       }
