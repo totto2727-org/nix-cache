@@ -7,12 +7,14 @@ import { credentialsMatch } from '../src/cloudflare-storage.ts'
 import { failedCryptoLayer } from './crypto-fixture.ts'
 import { runTest } from './support.ts'
 
-const digest = crypto.subtle.digest.bind(crypto.subtle)
+// oxlint-disable-next-line rules/no-effect-runtime-run -- Read the default Node Web Crypto reference at the fixture boundary.
+const webCrypto = Effect.runSync(BrowserCrypto.WebCrypto)
+const digest = webCrypto.subtle.digest.bind(webCrypto.subtle)
 
 const withNativeComparator = (timingSafeEqual?: (left: Uint8Array, right: Uint8Array) => boolean): Crypto => ({
-  getRandomValues: (value) => crypto.getRandomValues(value),
-  randomUUID: () => crypto.randomUUID(),
-  subtle: new Proxy(crypto.subtle, {
+  getRandomValues: (value) => webCrypto.getRandomValues(value),
+  randomUUID: () => webCrypto.randomUUID(),
+  subtle: new Proxy(webCrypto.subtle, {
     get: (subtle, key): unknown => (key === 'timingSafeEqual' ? timingSafeEqual : Reflect.get(subtle, key, subtle)),
   }),
 })
