@@ -1,7 +1,5 @@
 import type { CacheStorage, R2Bucket, R2GetOptions, R2Object, R2ObjectBody } from '@cloudflare/workers-types'
-import { BrowserCrypto } from '@effect/platform-browser'
 import { withEnv } from 'cloudflare:workers'
-import { Effect } from 'effect'
 
 import type { Fault } from './cache-fixture.ts'
 
@@ -73,8 +71,8 @@ const injectCache = (fault: Fault): (() => void) => {
 
 // BrowserCrypto translates this native rejection into an Effect PlatformError.
 const injectDigestFailure = (): (() => void) => {
-  // oxlint-disable-next-line rules/no-effect-runtime-run -- Inject the fault into the actual Workerd Web Crypto reference.
-  const { subtle } = Effect.runSync(BrowserCrypto.WebCrypto)
+  // oxlint-disable-next-line rules/no-raw-crypto -- Workerd loads this unbundled fault fixture without npm imports. Patch the native digest that the deployed Effect layer uses.
+  const { subtle } = crypto
   const original = Object.getOwnPropertyDescriptor(subtle, 'digest')
   Object.defineProperty(subtle, 'digest', {
     configurable: true,
